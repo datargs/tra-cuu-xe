@@ -123,10 +123,15 @@ grid_response = AgGrid(
 )
 
 # 📝 Nội dung chi tiết
-selected = grid_response["selected_rows"]
-if selected:
+# 📝 Nội dung chi tiết
+selected = grid_response.get("selected_rows", [])
+if selected and "Nội dung" in selected[0] and selected[0]["Nội dung"].strip():
     st.markdown("#### 📝 Nội dung chi tiết:")
-    st.info(selected[0]["Nội dung"])
+    st.markdown(f"""
+    <div style="padding: 10px; background-color: #f1f3f6; border-radius: 5px; border: 1px solid #ccc;">
+        {selected[0]["Nội dung"]}
+    </div>
+    """, unsafe_allow_html=True)
 
 # 💰 Tổng chi phí
 tong_chi_phi = df_ls["Chi phí"].sum()
