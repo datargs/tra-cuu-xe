@@ -72,9 +72,47 @@ if filter_btn and tu_ngay and den_ngay:
 df_ls["Ngày"] = df_ls["Ngày"].dt.strftime("%d/%m/%Y")
 df_ls["Chi phí"] = pd.to_numeric(df_ls["Chi phí"], errors="coerce").fillna(0)
 df_ls["Chi phí hiển thị"] = df_ls["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
-
+df_ls["Xem"] = "👁️ Xem"
 # 📑 Giao diện bảng AgGrid
-gb = GridOptionsBuilder.from_dataframe(df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]])
+gb = GridOptionsBuilder.from_dataframe(df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị", "Xem"]])
+
+# Style chung cho các cột
+one_line_style = JsCode("""
+    function(params) {
+        return {
+            'white-space': 'nowrap',
+            'overflow': 'hidden',
+            'text-overflow': 'ellipsis'
+        }
+    }
+""")
+
+# Cột ngắn
+gb.configure_column("Biển số", width=90, cellStyle=one_line_style)
+gb.configure_column("Ngày", width=90, cellStyle=one_line_style)
+gb.configure_column("Chi phí hiển thị", header_name="Chi phí", width=100, cellStyle=one_line_style)
+
+# Cột nội dung
+gb.configure_column("Nội dung", width=250, cellStyle=JsCode("""
+    function(params) {
+        return {
+            'white-space': 'nowrap',
+            'overflow': 'hidden',
+            'text-overflow': 'ellipsis',
+            'maxWidth': '250px'
+        };
+    }
+"""))
+
+# Cột "Xem" với nút bấm
+gb.configure_column("Xem", header_name="", width=70,
+    cellRenderer=JsCode('''
+        function(params) {
+            return `<button style="padding:4px 8px;">👁️</button>`;
+        }
+    '''), 
+    editable=False, filter=False, sortable=False)
+
 
 one_line_style = JsCode("""
     function(params) {
@@ -113,25 +151,21 @@ grid_height = len(df_ls) * row_height + padding
 grid_height = max(150, min(600, grid_height))
 
 grid_response = AgGrid(
-    df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]],
+    df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị", "Xem"]],
     gridOptions=grid_options,
     height=grid_height,
     width="100%",
     fit_columns_on_grid_load=False,
-    update_mode=GridUpdateMode.SELECTION_CHANGED,
+    update_mode=GridUpdateMode.MODEL_CHANGED,
     allow_unsafe_jscode=True,
 )
 
 
 # 📝 Nội dung chi tiết
 selected = grid_response.get("selected_rows", [])
-if selected and "Nội dung" in selected[0] and selected[0]["Nội dung"].strip():
+if selected:
     st.markdown("#### 📝 Nội dung chi tiết:")
-    st.markdown(f"""
-    <div style="padding: 10px; background-color: #f1f3f6; border-radius: 5px; border: 1px solid #ccc;">
-        {selected[0]["Nội dung"]}
-    </div>
-    """, unsafe_allow_html=True)
+    st.info(selected[0]["Nội dung"])
 
 # 💰 Tổng chi phí
 tong_chi_phi = df_ls["Chi phí"].sum()
