@@ -120,14 +120,28 @@ st.markdown("### 📑 Chi tiết lịch sử bảo dưỡng")
 grid_response = AgGrid(
     df_ls,
     gridOptions=grid_options,
-    height=min(500, 40 + 35 * len(df_ls)),
+    # Tính chiều cao động chính xác hơn
+row_height = 38  # mỗi dòng khoảng 38px
+padding = 60     # chừa thêm khoảng đệm
+grid_height = len(df_ls) * row_height + padding
+grid_height = max(150, min(600, grid_height))  # giới hạn chiều cao để không quá dài
+
+grid_response = AgGrid(
+    df_ls,
+    gridOptions=grid_options,
+    height=grid_height,
     width="100%",
     fit_columns_on_grid_load=False,
     update_mode=GridUpdateMode.SELECTION_CHANGED,
     allow_unsafe_jscode=True,
 )
-# TẠO KHOẢNG TRẮNG 1 DÒNG
-st.markdown("<div style='height: 35px;'></div>", unsafe_allow_html=True)
+
+    width="100%",
+    fit_columns_on_grid_load=False,
+    update_mode=GridUpdateMode.SELECTION_CHANGED,
+    allow_unsafe_jscode=True,
+)
+
 # Hiển thị nội dung khi chọn dòng
 selected = grid_response["selected_rows"]
 if selected:
