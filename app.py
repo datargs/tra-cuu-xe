@@ -25,9 +25,24 @@ df_next = pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_
 
 st.title("🔧 Tra cứu lịch sử bảo dưỡng xe")
 
-# 📌 Chọn biển số
+# Tạo danh sách biển số
 bien_so_list = df_xe["Biển số"].dropna().unique().tolist()
-selected_bien_so = st.selectbox("📌 Chọn biển số xe:", sorted(bien_so_list))
+bien_so_list_sorted = sorted(bien_so_list)
+
+# Khởi tạo session_state nếu chưa có
+if "selected_bien_so" not in st.session_state:
+    st.session_state.selected_bien_so = bien_so_list_sorted[0]  # mặc định là xe đầu tiên
+
+# Hiển thị selectbox với giá trị được lưu trong session
+selected_bien_so = st.selectbox(
+    "📌 Chọn biển số xe:",
+    bien_so_list_sorted,
+    index=bien_so_list_sorted.index(st.session_state.selected_bien_so)
+)
+
+# Cập nhật session_state nếu người dùng chọn mới
+st.session_state.selected_bien_so = selected_bien_so
+
 
 # 📄 Hiển thị thông tin xe
 xe_info = df_xe[df_xe["Biển số"] == selected_bien_so].iloc[0]
