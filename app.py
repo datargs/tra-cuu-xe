@@ -1,95 +1,93 @@
 import streamlit as st
 import pandas as pd
 import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-from google.oauth2.service_account import Credentials
 from io import BytesIO
 
-# ===== KẾT NỐI GOOGLE SHEET =====
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-credentials = Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"], scopes=SCOPES
-)
+# Thiết lập Google Sheets API
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
+client = gspread.authorize(creds)
 
-gc = gspread.authorize(credentials)
-spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo/edit?usp=sharing")
+# Mở Google Sheet
+spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
 
-# Đọc các sheet
+# Đọc dữ liệu từ các sheet
 df_xe = pd.DataFrame(spreadsheet.worksheet("Xe").get_all_records())
-df_bdt = pd.DataFrame(spreadsheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records())
+df_lich = pd.DataFrame(spreadsheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records())
 df_ls = pd.DataFrame(spreadsheet.worksheet("Lịch sử bảo dưỡng").get_all_records())
 
-# Chuyển ngày về định dạng datetime
-df_ls["Ngày"] = pd.to_datetime(df_ls["Ngày"], dayfirst=True, errors="coerce")
-df_bdt["Ngày"] = pd.to_datetime(df_bdt["Ngày"], dayfirst=True, errors="coerce")
+# Thiết lập giao diện
+st.title("📋 Tra cứu lịch sử và lịch bảo dưỡng xe")
 
-st.set_page_config(page_title="Tra cứu bảo dưỡng xe", layout="wide")
-st.title("🚗 Tra cứu bảo dưỡng xe")
+# Biển số chọn ở trên đầu, có tìm kiếm
+bien_so = st.selectbox("🔍 Chọn biển số xe", sorted(df_xe["Biển số"].unique()))
 
-# ==== CHỌN BIỂN SỐ ====
-bien_so_list = sorted(df_xe["Biển số"].unique())
-bien_so = st.selectbox("🔍 Chọn biển số xe", options=bien_so_list)
+# Hiển thị thông tin xe
+st.subheader("📌 Thông tin xe")
+st.table(df_xe[df_xe["Biển số"] == bien_so])
 
-if bien_so:
-    st.success(f"✅ Đã chọn: {bien_so}")
+# Hiển thị lịch bảo dưỡng tiếp theo
+st.subheader("📅 Lịch bảo dưỡng tiếp theo")
+lich_tiep = df_lich[df_lich["Biển số"] == bien_so]
+if not lich_tiep.empty:
+    du_kien = lich_tiep.iloc[0]["Dự kiến lần tiếp theo"]
+    goi_y = lich_tiep.iloc[0]["Gợi ý nội dung"]
+    st.info(f"**Dự kiến lần tiếp theo:** {du_kien}\n\n**Gợi ý nội dung:** {goi_y}")
+else:
+    st.warning("Chưa có lịch bảo dưỡng tiếp theo")
 
-    # ==== THÔNG TIN XE ====
-    st.subheader("📄 Thông tin xe")
-    st.dataframe(df_xe[df_xe["Biển số"] == bien_so], use_container_width=True)
+# Hiển thị lịch sử bảo dưỡng
+st.subheader("🧾 Lịch sử bảo dưỡng")
 
-    # ==== LỊCH BẢO DƯỠNG TIẾP THEO ====
-    st.subheader("🛠️ Lịch bảo dưỡng tiếp theo")
-    bdt_row = df_bdt[df_bdt["Biển số"] == bien_so]
-    if not bdt_row.empty:
-        st.dataframe(bdt_row, use_container_width=True)
-    else:
-        st.info("🚫 Chưa có lịch bảo dưỡng tiếp theo.")
-
-    # ==== LỊCH SỬ BẢO DƯỠNG ====
-    st.subheader("📚 Lịch sử bảo dưỡng")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        tu_ngay = st.date_input("📅 Từ ngày", value=None)
-    with col2:
-        den_ngay = st.date_input("📅 Đến ngày", value=None)
-    with col3:
-        xem_btn = st.button("📂 Xem")
-
-    df_ls_xe = df_ls[df_ls["Biển số"] == bien_so]
-
-    if tu_ngay and den_ngay:
-        if tu_ngay > den_ngay:
-            st.error("❗ Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.")
+# Lọc theo khoảng thời gian
+col1, col2, col3 = st.columns([1, 1, 1])
+with col1:
+    tu_ngay = st.date_input("📆 Từ ngày", value=None)
+with col2:
+    den_ngay = st.date_input("📆 Đến ngày", value=None)
+with col3:
+    if st.button("Xem"):
+        if tu_ngay and den_ngay:
+            if tu_ngay > den_ngay:
+                st.error("❌ Từ ngày phải nhỏ hơn hoặc bằng đến ngày. Vui lòng chọn lại.")
+            else:
+                df_locs = df_ls[
+                    (df_ls["Biển số"] == bien_so) &
+                    (pd.to_datetime(df_ls["Ngày"], dayfirst=True) >= pd.to_datetime(tu_ngay)) &
+                    (pd.to_datetime(df_ls["Ngày"], dayfirst=True) <= pd.to_datetime(den_ngay))
+                ]
+                st.dataframe(df_locs, use_container_width=True)
+                # Tổng chi phí
+                if not df_locs.empty:
+                    try:
+                        df_locs["Chi phí"] = pd.to_numeric(df_locs["Chi phí"], errors='coerce')
+                        tong = df_locs["Chi phí"].sum()
+                        st.success(f"💰 **Tổng chi phí:** {tong:,.0f} VND")
+                    except:
+                        st.warning("Không thể tính tổng chi phí do dữ liệu không hợp lệ.")
         else:
-            df_ls_xe = df_ls_xe[(df_ls_xe["Ngày"] >= pd.to_datetime(tu_ngay)) & (df_ls_xe["Ngày"] <= pd.to_datetime(den_ngay))]
+            df_locs = df_ls[df_ls["Biển số"] == bien_so]
+            st.dataframe(df_locs, use_container_width=True)
+            if not df_locs.empty:
+                try:
+                    df_locs["Chi phí"] = pd.to_numeric(df_locs["Chi phí"], errors='coerce')
+                    tong = df_locs["Chi phí"].sum()
+                    st.success(f"💰 **Tổng chi phí:** {tong:,.0f} VND")
+                except:
+                    st.warning("Không thể tính tổng chi phí do dữ liệu không hợp lệ.")
 
-    elif tu_ngay:
-        df_ls_xe = df_ls_xe[df_ls_xe["Ngày"] >= pd.to_datetime(tu_ngay)]
-    elif den_ngay:
-        df_ls_xe = df_ls_xe[df_ls_xe["Ngày"] <= pd.to_datetime(den_ngay)]
-
-    if df_ls_xe.empty:
-        st.warning("🚫 Không có dữ liệu lịch sử bảo dưỡng.")
-    else:
-        st.dataframe(df_ls_xe, use_container_width=True)
-
-        # Tổng chi phí
-        if "Chi phí" in df_ls_xe.columns:
-            try:
-                df_ls_xe["Chi phí"] = pd.to_numeric(df_ls_xe["Chi phí"], errors="coerce")
-                tong = df_ls_xe["Chi phí"].sum()
-                st.markdown(f"### 💰 Tổng chi phí: **{tong:,.0f} VND**")
-            except:
-                st.warning("⚠️ Cột Chi phí không đúng định dạng số.")
-
-        # Xuất Excel
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_ls_xe.to_excel(writer, index=False, sheet_name="Lich_su_bao_duong")
-        st.download_button(
-            label="📥 Tải xuống Excel",
-            data=output.getvalue(),
-            file_name=f"lich_su_{bien_so}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+# Xuất Excel
+if st.button("📤 Xuất Excel lịch sử bảo dưỡng"):
+    df_export = df_ls[df_ls["Biển số"] == bien_so]
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_export.to_excel(writer, index=False, sheet_name='Lịch sử bảo dưỡng')
+    output.seek(0)
+    st.download_button(
+        label="Tải file Excel",
+        data=output,
+        file_name=f"Lich_su_bao_duong_{bien_so}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
