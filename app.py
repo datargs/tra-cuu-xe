@@ -75,7 +75,7 @@ df_ls["Chi phí hiển thị"] = df_ls["Chi phí"].apply(lambda x: f"{x:,.0f}".r
 df_ls["Xem"] = "👁️ Xem"
 # 📑 Giao diện bảng AgGrid
 gb = GridOptionsBuilder.from_dataframe(df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]])
-
+gb.configure_selection("single", use_checkbox=False)
 one_line_style = JsCode("""
     function(params) {
         return {
