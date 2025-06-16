@@ -92,7 +92,7 @@ gb.configure_column("Ngày", width=90, cellStyle=one_line_style)
 gb.configure_column("Chi phí hiển thị", header_name="Chi phí", width=100, cellStyle=one_line_style)
 
 # Cột nội dung dài
-gb.configure_column("Nội dung", width=250, cellStyle=JsCode("""
+gb.configure_column("Nội dung", width=120, cellStyle=JsCode("""
     function(params) {
         return {
             'white-space': 'nowrap',
