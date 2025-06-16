@@ -117,14 +117,11 @@ grid_options = gb.build()
 
 
 st.markdown("### 📑 Chi tiết lịch sử bảo dưỡng")
-grid_response = AgGrid(
-    df_ls,
-    gridOptions=grid_options,
-    # Tính chiều cao động chính xác hơn
+# Tính chiều cao động chính xác hơn
 row_height = 38  # mỗi dòng khoảng 38px
 padding = 60     # chừa thêm khoảng đệm
 grid_height = len(df_ls) * row_height + padding
-grid_height = max(150, min(600, grid_height))  # giới hạn chiều cao để không quá dài
+grid_height = max(150, min(600, grid_height))  # giới hạn chiều cao
 
 grid_response = AgGrid(
     df_ls,
@@ -133,14 +130,9 @@ grid_response = AgGrid(
     width="100%",
     fit_columns_on_grid_load=False,
     update_mode=GridUpdateMode.SELECTION_CHANGED,
-    allow_unsafe_jscode=True,
+    allow_unsafe_jscode=True
 )
 
-    width="100%",
-    fit_columns_on_grid_load=False,
-    update_mode=GridUpdateMode.SELECTION_CHANGED,
-    allow_unsafe_jscode=True,
-)
 
 # Hiển thị nội dung khi chọn dòng
 selected = grid_response["selected_rows"]
