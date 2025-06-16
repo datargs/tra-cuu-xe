@@ -113,6 +113,7 @@ gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=Js
 """))
 
 gb.configure_grid_options(domLayout='normal', suppressRowClickSelection=False)
+gb.configure_selection('single', use_checkbox=False)
 grid_options = gb.build()
 
 
@@ -133,17 +134,20 @@ grid_response = AgGrid(
     allow_unsafe_jscode=True
 )
 
-
 # Hiển thị nội dung khi chọn dòng
 selected = grid_response["selected_rows"]
-if selected and "Nội dung" in selected[0]:
+if selected and "Nội dung" in selected[0] and selected[0]["Nội dung"]:
     st.markdown("#### 📝 Nội dung chi tiết:")
     st.markdown(
-        f"""<div style='padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 5px;'>
+        f"""<div style='padding: 12px; background-color: #f0f2f6; border: 1px solid #d3d3d3; border-radius: 8px; font-size: 16px; line-height: 1.6;'>
             {selected[0]["Nội dung"]}
         </div>""",
         unsafe_allow_html=True
     )
+else:
+    st.markdown("#### 📝 Nội dung chi tiết:")
+    st.info("👉 Bấm chọn một dòng để xem chi tiết nội dung.")
+
 
 
 # Tổng chi phí
