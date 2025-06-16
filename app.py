@@ -76,6 +76,8 @@ if filter_btn and tu_ngay and den_ngay:
 # Format cột
 df_ls["Ngày"] = df_ls["Ngày"].dt.strftime("%d/%m/%Y")
 df_ls["Chi phí"] = pd.to_numeric(df_ls["Chi phí"], errors="coerce").fillna(0)
+df_ls["Chi phí"] = df_ls["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+
 
 from st_aggrid import JsCode
 
@@ -119,7 +121,7 @@ grid_response = AgGrid(
     gridOptions=grid_options,
     height=min(500, 40 + 35 * len(df_ls)),
     width="100%",
-    fit_columns_on_grid_load=True,
+    fit_columns_on_grid_load=False,
     update_mode=GridUpdateMode.SELECTION_CHANGED,
     allow_unsafe_jscode=True,
 )
