@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2 import service_account
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
 from io import BytesIO
 import xlsxwriter
 from datetime import datetime
@@ -13,7 +13,13 @@ creds = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"], scopes=scope
 )
 gc = gspread.authorize(creds)
-sheet = gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
+
+try:
+    sheet = gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
+except Exception as e:
+    st.error("❌ Không thể truy cập Google Sheet. Vui lòng kiểm tra:")
+    st.code(str(e))
+    st.stop()
 
 # Đọc dữ liệu
 df_xe = pd.DataFrame(sheet.worksheet("Xe").get_all_records())
@@ -43,7 +49,6 @@ thong_tin_html = f"""
 
 st.markdown("### 📄 Thông tin xe")
 st.markdown(thong_tin_html, unsafe_allow_html=True)
-
 
 # Hiển thị lịch bảo dưỡng tiếp theo
 st.markdown("### 📅 Lịch bảo dưỡng tiếp theo:")
@@ -75,15 +80,13 @@ if filter_btn and tu_ngay and den_ngay:
 
 # Format cột
 df_ls["Ngày"] = df_ls["Ngày"].dt.strftime("%d/%m/%Y")
-df_ls["Chi phí"] = pd.to_numeric(df_ls["Chi phí"], errors="coerce").fillna(0)
-df_ls["Chi phí"] = df_ls["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+df_ls["Chi phí số"] = pd.to_numeric(df_ls["Chi phí"], errors="coerce").fillna(0)
+df_ls["Chi phí hiển thị"] = df_ls["Chi phí số"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
 
+# Chuẩn bị dataframe hiển thị
+df_display = df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]].rename(columns={"Chi phí hiển thị": "Chi phí"})
 
-from st_aggrid import JsCode
-
-gb = GridOptionsBuilder.from_dataframe(df_ls)
-
-# Các cột hiển thị một dòng
+# Giao diện AgGrid
 one_line_style = JsCode("""
     function(params) {
         return {
@@ -94,13 +97,10 @@ one_line_style = JsCode("""
     }
 """)
 
-# Cột biển số, ngày, chi phí: không wrap
+gb = GridOptionsBuilder.from_dataframe(df_display)
 gb.configure_column("Biển số", wrapText=False, autoHeight=False, width=90, cellStyle=one_line_style)
 gb.configure_column("Ngày", wrapText=False, autoHeight=False, width=90, cellStyle=one_line_style)
-gb.configure_column("Nội dung", wrapText=False, autoHeight=False, width=120, cellStyle=one_line_style)
-gb.configure_column("Chi phí", wrapText=False, autoHeight=False, width=90, cellStyle=one_line_style)
-
-# Cột nội dung: 1 dòng, dấu ba chấm
+gb.configure_column("Chi phí", wrapText=False, autoHeight=False, width=100, cellStyle=one_line_style)
 gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=JsCode("""
     function(params) {
         return {
@@ -111,48 +111,34 @@ gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=Js
         };
     }
 """))
-
 gb.configure_grid_options(domLayout='normal', suppressRowClickSelection=False)
-gb.configure_selection('single', use_checkbox=False)
 grid_options = gb.build()
 
-
 st.markdown("### 📑 Chi tiết lịch sử bảo dưỡng")
-# Tính chiều cao động chính xác hơn
-row_height = 38  # mỗi dòng khoảng 38px
-padding = 60     # chừa thêm khoảng đệm
-grid_height = len(df_ls) * row_height + padding
-grid_height = max(150, min(600, grid_height))  # giới hạn chiều cao
+row_height = 38
+padding = 60
+grid_height = len(df_display) * row_height + padding
+grid_height = max(150, min(600, grid_height))
 
 grid_response = AgGrid(
-    df_ls,
+    df_display,
     gridOptions=grid_options,
     height=grid_height,
     width="100%",
     fit_columns_on_grid_load=False,
     update_mode=GridUpdateMode.SELECTION_CHANGED,
-    allow_unsafe_jscode=True
+    allow_unsafe_jscode=True,
 )
 
 # Hiển thị nội dung khi chọn dòng
 selected = grid_response["selected_rows"]
-if selected and "Nội dung" in selected[0] and selected[0]["Nội dung"]:
+if selected:
     st.markdown("#### 📝 Nội dung chi tiết:")
-    st.markdown(
-        f"""<div style='padding: 12px; background-color: #f0f2f6; border: 1px solid #d3d3d3; border-radius: 8px; font-size: 16px; line-height: 1.6;'>
-            {selected[0]["Nội dung"]}
-        </div>""",
-        unsafe_allow_html=True
-    )
-else:
-    st.markdown("#### 📝 Nội dung chi tiết:")
-    st.info("👉 Bấm chọn một dòng để xem chi tiết nội dung.")
-
-
+    st.info(selected[0]["Nội dung"])
 
 # Tổng chi phí
-tong_chi_phi = df_ls["Chi phí"].str.replace(".", "", regex=False).astype(float).sum()
-st.markdown(f"#### 💵 Tổng chi phí: `{f'{tong_chi_phi:,.0f}'.replace(',', '.')} VND`")
+tong_chi_phi = df_ls["Chi phí số"].sum()
+st.markdown(f"#### 💵 Tổng chi phí: `{tong_chi_phi:,.0f}` VND")
 
 # Xuất Excel
 output = BytesIO()
