@@ -126,7 +126,8 @@ grid_response = AgGrid(
     update_mode=GridUpdateMode.SELECTION_CHANGED,
     allow_unsafe_jscode=True,
 )
-
+# TẠO KHOẢNG TRẮNG 1 DÒNG
+st.markdown("<div style='height: 35px;'></div>", unsafe_allow_html=True)
 # Hiển thị nội dung khi chọn dòng
 selected = grid_response["selected_rows"]
 if selected:
