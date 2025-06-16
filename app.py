@@ -73,31 +73,20 @@ if filter_btn and tu_ngay and den_ngay:
     else:
         df_ls = df_ls[(df_ls["Ngày"].dt.date >= tu_ngay) & (df_ls["Ngày"].dt.date <= den_ngay)]
 
-# Format cột
-df_ls["Ngày"] = df_ls["Ngày"].dt.strftime("%d/%m/%Y")
-df_ls["Chi phí"] = pd.to_numeric(df_ls["Chi phí"], errors="coerce").fillna(0)
-
 from st_aggrid import JsCode
 
+# Format số có dấu chấm hàng nghìn
+df_ls["Chi phí"] = df_ls["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+
+# Tùy chọn AgGrid
 gb = GridOptionsBuilder.from_dataframe(df_ls)
 
-# Các cột hiển thị một dòng
-one_line_style = JsCode("""
-    function(params) {
-        return {
-            'white-space': 'nowrap',
-            'overflow': 'hidden',
-            'text-overflow': 'ellipsis'
-        }
-    }
-""")
+# Cột Biển số, Ngày, Chi phí: cho phép scroll ngang nếu cần, không giới hạn chiều rộng
+gb.configure_column("Biển số", wrapText=False, autoHeight=False, resizable=True)
+gb.configure_column("Ngày", wrapText=False, autoHeight=False, resizable=True)
+gb.configure_column("Chi phí", wrapText=False, autoHeight=False, resizable=True, type=["numericColumn", "rightAligned"])
 
-# Cột biển số, ngày, chi phí: không wrap
-gb.configure_column("Biển số", wrapText=False, autoHeight=False, cellStyle=one_line_style)
-gb.configure_column("Ngày", wrapText=False, autoHeight=False, cellStyle=one_line_style)
-gb.configure_column("Chi phí", wrapText=False, autoHeight=False, cellStyle=one_line_style)
-
-# Cột nội dung: 1 dòng, dấu ba chấm
+# Cột Nội dung: hiển thị 1 dòng có dấu ba chấm
 gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=JsCode("""
     function(params) {
         return {
@@ -109,8 +98,21 @@ gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=Js
     }
 """))
 
-gb.configure_grid_options(domLayout='normal', suppressRowClickSelection=False)
+# Không cho chọn dòng = click nhầm, nhưng vẫn giữ tương tác
+gb.configure_grid_options(domLayout='autoHeight', suppressRowClickSelection=True)
 grid_options = gb.build()
+
+# Hiển thị AgGrid
+grid_response = AgGrid(
+    df_ls,
+    gridOptions=grid_options,
+    width="100%",
+    fit_columns_on_grid_load=False,
+    update_mode=GridUpdateMode.SELECTION_CHANGED,
+    allow_unsafe_jscode=True,
+    enable_enterprise_modules=False
+)
+
 
 
 st.markdown("### 📑 Chi tiết lịch sử bảo dưỡng")
