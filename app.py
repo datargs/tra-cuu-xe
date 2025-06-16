@@ -121,8 +121,8 @@ grid_response = AgGrid(
     update_mode=GridUpdateMode.SELECTION_CHANGED,
     allow_unsafe_jscode=True,
 )
+st.caption("👉 Bấm vào ô **Nội dung** để xem chi tiết phía dưới.")
 
-# 📝 Nội dung chi tiết
 # 📝 Nội dung chi tiết
 selected = grid_response.get("selected_rows", [])
 if selected and "Nội dung" in selected[0] and selected[0]["Nội dung"].strip():
