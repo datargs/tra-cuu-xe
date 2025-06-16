@@ -1,103 +1,108 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from google.oauth2.service_account import Credentials
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
-from datetime import datetime
+from google.oauth2 import service_account
+from st_aggrid import AgGrid, GridOptionsBuilder
 from io import BytesIO
+import datetime
 
-# Kết nối Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-client = gspread.authorize(creds)
-spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
+# Thiết lập cấu hình trang
+st.set_page_config(page_title="Tra cứu bảo dưỡng xe", layout="wide")
 
-# Lấy dữ liệu
-df_ls = pd.DataFrame(spreadsheet.worksheet("Lịch sử bảo dưỡng").get_all_records())
-df_tt = pd.DataFrame(spreadsheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records())
+# Load credentials từ secrets
+creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
+gc = gspread.authorize(creds)
 
-# Định dạng ngày
-df_ls["Ngày"] = pd.to_datetime(df_ls["Ngày"], dayfirst=True, errors='coerce')
-df_tt["Dự kiến lần tiếp theo"] = pd.to_datetime(df_tt["Dự kiến lần tiếp theo"], dayfirst=True, errors='coerce')
+# Mở Google Sheet
+sheet = gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
+ws_xe = sheet.worksheet("Xe")
+ws_ls = sheet.worksheet("Lịch sử bảo dưỡng")
+ws_next = sheet.worksheet("Lịch bảo dưỡng tiếp theo")
 
-# Giao diện
-st.set_page_config(page_title="Tra cứu lịch sử bảo dưỡng", layout="wide")
-st.title("🔧 Tra cứu lịch sử & lịch bảo dưỡng xe")
+# Đọc dữ liệu
+df_xe = pd.DataFrame(ws_xe.get_all_records())
+df_ls = pd.DataFrame(ws_ls.get_all_records())
+df_next = pd.DataFrame(ws_next.get_all_records())
 
-# Chọn biển số
-unique_plates = df_ls["Biển số"].dropna().unique().tolist()
-selected_plate = st.selectbox("🔍 Chọn biển số xe", sorted(unique_plates))
+# Tiêu đề trang
+st.title("🚗 Tra cứu lịch sử bảo dưỡng xe")
 
-if selected_plate:
-    # Hiển thị lịch bảo dưỡng tiếp theo
-    st.subheader("📅 Lịch bảo dưỡng tiếp theo:")
-    next_maint = df_tt[df_tt["Biển số"] == selected_plate]
-    if not next_maint.empty:
-        st.write("**Dự kiến:**", next_maint.iloc[0]["Dự kiến lần tiếp theo"].strftime("%d/%m/%Y"))
-        st.write("**Gợi ý nội dung:**", next_maint.iloc[0]["Gợi ý nội dung"])
-    else:
-        st.info("Chưa có lịch bảo dưỡng tiếp theo.")
+# Lấy danh sách biển số không trùng
+list_bien_so = sorted(df_xe["Biển số"].dropna().unique().tolist())
+selected_plate = st.selectbox("🔍 Chọn biển số xe", options=list_bien_so)
 
-    # Lọc theo ngày
-    st.subheader("📘 Lịch sử bảo dưỡng:")
-    col1, col2, col3 = st.columns([1.5, 1.5, 1])
-    with col1:
-        from_date = st.date_input("Từ ngày", value=None)
-    with col2:
-        to_date = st.date_input("Đến ngày", value=None)
-    with col3:
-        if st.button("Xem"):
-            if from_date and to_date and from_date > to_date:
-                st.error("⚠️ Từ ngày phải nhỏ hơn hoặc bằng đến ngày")
-            else:
-                st.session_state["filter"] = True
-                st.session_state["from_date"] = from_date
-                st.session_state["to_date"] = to_date
+# Hiển thị thông tin xe từ bảng "Xe"
+info = df_xe[df_xe["Biển số"] == selected_plate].squeeze()
+st.markdown(f"""
+**Biển số:** {info['Biển số']}  
+**Loại xe:** {info['Loại xe']}  
+**Năm sản xuất:** {int(info['Năm sản xuất'])}  
+**Trạng thái:** {info['Trạng thái']}
+""")
 
-    df_filtered = df_ls[df_ls["Biển số"] == selected_plate].copy()
+# Hiển thị lịch bảo dưỡng tiếp theo
+df_next_plate = df_next[df_next["Biển số"] == selected_plate]
+st.subheader("📅 Lịch bảo dưỡng tiếp theo:")
 
-    if st.session_state.get("filter", False):
-        f = st.session_state.get("from_date")
-        t = st.session_state.get("to_date")
-        if f:
-            df_filtered = df_filtered[df_filtered["Ngày"] >= pd.to_datetime(f)]
-        if t:
-            df_filtered = df_filtered[df_filtered["Ngày"] <= pd.to_datetime(t)]
+if not df_next_plate.empty:
+    row = df_next_plate.iloc[0]
+    st.markdown(f"**Dự kiến lần tiếp theo:** {row['Dự kiến lần tiếp theo']}  \n**Gợi ý nội dung:** {row['Gợi ý nội dung']}")
+else:
+    st.warning("Chưa có lịch bảo dưỡng tiếp theo.")
 
-    df_filtered["Ngày hiển thị"] = df_filtered["Ngày"].dt.strftime("%d/%m/%Y")
-    df_display = df_filtered[["Ngày hiển thị", "Nội dung", "Chi phí", "Ghi chú"]].rename(
-        columns={"Ngày hiển thị": "Ngày"}
-    )
+# Format ngày
+df_ls["Ngày"] = pd.to_datetime(df_ls["Ngày"], errors='coerce')
+df_ls = df_ls[df_ls["Biển số"] == selected_plate].copy()
+df_ls["Ngày hiển thị"] = df_ls["Ngày"].dt.strftime("%d/%m/%Y")
 
-    # Tính tổng chi phí
-    df_filtered["Chi phí"] = pd.to_numeric(df_filtered["Chi phí"], errors="coerce")
-    total_cost = df_filtered["Chi phí"].sum()
+# Bộ lọc ngày
+st.subheader("📂 Lọc theo thời gian")
 
-    # AgGrid hiển thị bảng
-    gb = GridOptionsBuilder.from_dataframe(df_display)
-    gb.configure_column("Nội dung", wrapText=False, autoHeight=False, tooltipField="Nội dung")
-    gb.configure_selection('single')
+col1, col2, col3 = st.columns([2, 2, 1])
+
+with col1:
+    tu_ngay = st.date_input("Từ ngày", value=None, format="DD/MM/YYYY")
+
+with col2:
+    den_ngay = st.date_input("Đến ngày", value=None, format="DD/MM/YYYY")
+
+with col3:
+    if st.button("Xem"):
+        if tu_ngay and den_ngay and tu_ngay > den_ngay:
+            st.error("❌ Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.")
+        else:
+            if tu_ngay:
+                df_ls = df_ls[df_ls["Ngày"] >= pd.to_datetime(tu_ngay)]
+            if den_ngay:
+                df_ls = df_ls[df_ls["Ngày"] <= pd.to_datetime(den_ngay)]
+
+# Hiển thị bảng lịch sử bảo dưỡng
+st.subheader("🛠️ Lịch sử bảo dưỡng")
+
+if not df_ls.empty:
+    gb = GridOptionsBuilder.from_dataframe(df_ls[["Ngày hiển thị", "Nội dung", "Chi phí", "Ghi chú"]])
+    gb.configure_column("Nội dung", wrapText=True, autoHeight=True)
+    gb.configure_column("Ghi chú", wrapText=True, autoHeight=True)
     gb.configure_grid_options(domLayout='normal')
-    grid_response = AgGrid(
-        df_display,
-        gridOptions=gb.build(),
-        height=400,
-        update_mode=GridUpdateMode.SELECTION_CHANGED,
-        fit_columns_on_grid_load=True,
-    )
+    gridOptions = gb.build()
 
-    if grid_response['selected_rows']:
-        st.markdown("### 📄 Nội dung chi tiết:")
-        st.info(grid_response['selected_rows'][0]["Nội dung"])
+    AgGrid(df_ls[["Ngày hiển thị", "Nội dung", "Chi phí", "Ghi chú"]],
+           gridOptions=gridOptions,
+           fit_columns_on_grid_load=True,
+           height=(len(df_ls)*35 + 60),
+           theme='streamlit')
 
-    st.markdown(f"### 💰 Tổng chi phí: **{total_cost:,.0f} VND**")
+    # Tổng chi phí
+    st.markdown(f"**💰 Tổng chi phí:** {df_ls['Chi phí'].sum():,.0f} VND")
+else:
+    st.info("Không có dữ liệu bảo dưỡng phù hợp.")
 
-    # Xuất Excel
-    def convert_df_to_excel(df):
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='LichSuBaoDuong')
-        return output.getvalue()
+# Xuất Excel
+st.subheader("📤 Xuất dữ liệu")
 
-    excel_data = convert_df_to_excel(df_display)
-    st.download_button("⬇️ Xuất Excel", data=excel_data, file_name="lich_su_bao_duong.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+if st.button("Xuất Excel"):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_ls.to_excel(writer, index=False, sheet_name="Lịch sử bảo dưỡng")
+    st.download_button(label="📥 Tải Excel", data=output.getvalue(),
+                       file_name=f"lich_su_bao_duong_{selected_plate}.xlsx", mime="application/vnd.ms-excel")
