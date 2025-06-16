@@ -136,9 +136,15 @@ grid_response = AgGrid(
 
 # Hiển thị nội dung khi chọn dòng
 selected = grid_response["selected_rows"]
-if selected:
+if selected and "Nội dung" in selected[0]:
     st.markdown("#### 📝 Nội dung chi tiết:")
-    st.info(selected[0]["Nội dung"])
+    st.markdown(
+        f"""<div style='padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 5px;'>
+            {selected[0]["Nội dung"]}
+        </div>""",
+        unsafe_allow_html=True
+    )
+
 
 # Tổng chi phí
 tong_chi_phi = df_ls["Chi phí"].sum()
