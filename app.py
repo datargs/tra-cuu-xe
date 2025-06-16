@@ -7,32 +7,29 @@ from io import BytesIO
 import xlsxwriter
 from datetime import datetime
 
-# Kết nối Google Sheets
+# ⚙️ Cấu hình Streamlit (PHẢI đặt ở đầu!)
+st.set_page_config(page_title="Tra cứu lịch bảo dưỡng", layout="wide")
+
+# 🔐 Kết nối Google Sheets
 scope = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"], scopes=scope
 )
 gc = gspread.authorize(creds)
+sheet = gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
 
-@st.cache_data(ttl=120)
-def load_data():
-    sheet = gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
-    df_xe = pd.DataFrame(sheet.worksheet("Xe").get_all_records())
-    df_ls = pd.DataFrame(sheet.worksheet("Lịch sử bảo dưỡng").get_all_records())
-    df_next = pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records())
-    return df_xe, df_ls, df_next
+# 📄 Đọc dữ liệu
+df_xe = pd.DataFrame(sheet.worksheet("Xe").get_all_records())
+df_ls = pd.DataFrame(sheet.worksheet("Lịch sử bảo dưỡng").get_all_records())
+df_next = pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records())
 
-df_xe, df_ls, df_next = load_data()
-
-# Cấu hình Streamlit
-st.set_page_config(page_title="Tra cứu lịch bảo dưỡng", layout="wide")
 st.title("🔧 Tra cứu lịch sử bảo dưỡng xe")
 
-# Chọn biển số
+# 📌 Chọn biển số
 bien_so_list = df_xe["Biển số"].dropna().unique().tolist()
 selected_bien_so = st.selectbox("📌 Chọn biển số xe:", sorted(bien_so_list))
 
-# Thông tin xe
+# 📄 Hiển thị thông tin xe
 xe_info = df_xe[df_xe["Biển số"] == selected_bien_so].iloc[0]
 thong_tin_html = f"""
 <table style="border-collapse: collapse; width: 100%;">
@@ -45,7 +42,7 @@ thong_tin_html = f"""
 st.markdown("### 📄 Thông tin xe")
 st.markdown(thong_tin_html, unsafe_allow_html=True)
 
-# Lịch bảo dưỡng tiếp theo
+# 📅 Lịch bảo dưỡng tiếp theo
 st.markdown("### 📅 Lịch bảo dưỡng tiếp theo:")
 df_next_filtered = df_next[df_next["Biển số"] == selected_bien_so]
 if not df_next_filtered.empty:
@@ -54,14 +51,14 @@ if not df_next_filtered.empty:
 else:
     st.warning("Chưa có lịch bảo dưỡng tiếp theo.")
 
-# Bộ lọc thời gian
+# 📆 Bộ lọc thời gian
 st.markdown("### 📋 Lịch sử bảo dưỡng")
 col_tu, col_den, col_xem = st.columns([2, 2, 1])
 tu_ngay = col_tu.date_input("Từ ngày (DD/MM/YYYY)", format="DD/MM/YYYY", value=None)
 den_ngay = col_den.date_input("Đến ngày (DD/MM/YYYY)", format="DD/MM/YYYY", value=None)
 filter_btn = col_xem.button("🔍 Xem")
 
-# Lọc dữ liệu
+# 📊 Xử lý lịch sử bảo dưỡng
 df_ls = df_ls[df_ls["Biển số"] == selected_bien_so]
 df_ls["Ngày"] = pd.to_datetime(df_ls["Ngày"], errors="coerce")
 df_ls = df_ls.dropna(subset=["Ngày"])
@@ -72,12 +69,13 @@ if filter_btn and tu_ngay and den_ngay:
     else:
         df_ls = df_ls[(df_ls["Ngày"].dt.date >= tu_ngay) & (df_ls["Ngày"].dt.date <= den_ngay)]
 
-# Định dạng
 df_ls["Ngày"] = df_ls["Ngày"].dt.strftime("%d/%m/%Y")
 df_ls["Chi phí"] = pd.to_numeric(df_ls["Chi phí"], errors="coerce").fillna(0)
-df_ls["Chi phí"] = df_ls["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+df_ls["Chi phí hiển thị"] = df_ls["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
 
-# Giao diện bảng
+# 📑 Giao diện bảng AgGrid
+gb = GridOptionsBuilder.from_dataframe(df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]])
+
 one_line_style = JsCode("""
     function(params) {
         return {
@@ -88,11 +86,13 @@ one_line_style = JsCode("""
     }
 """)
 
-gb = GridOptionsBuilder.from_dataframe(df_ls)
-gb.configure_column("Biển số", wrapText=False, autoHeight=False, width=90, cellStyle=one_line_style)
-gb.configure_column("Ngày", wrapText=False, autoHeight=False, width=90, cellStyle=one_line_style)
-gb.configure_column("Chi phí", wrapText=False, autoHeight=False, width=100, cellStyle=one_line_style)
-gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=JsCode("""
+# Cột ngắn
+gb.configure_column("Biển số", width=90, cellStyle=one_line_style)
+gb.configure_column("Ngày", width=90, cellStyle=one_line_style)
+gb.configure_column("Chi phí hiển thị", header_name="Chi phí", width=100, cellStyle=one_line_style)
+
+# Cột nội dung dài
+gb.configure_column("Nội dung", width=250, cellStyle=JsCode("""
     function(params) {
         return {
             'white-space': 'nowrap',
@@ -102,10 +102,10 @@ gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=Js
         };
     }
 """))
+
 gb.configure_grid_options(domLayout='normal', suppressRowClickSelection=False)
 grid_options = gb.build()
 
-# Hiển thị bảng
 st.markdown("### 📑 Chi tiết lịch sử bảo dưỡng")
 row_height = 38
 padding = 60
@@ -113,7 +113,7 @@ grid_height = len(df_ls) * row_height + padding
 grid_height = max(150, min(600, grid_height))
 
 grid_response = AgGrid(
-    df_ls,
+    df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]],
     gridOptions=grid_options,
     height=grid_height,
     width="100%",
@@ -122,11 +122,24 @@ grid_response = AgGrid(
     allow_unsafe_jscode=True,
 )
 
-# Nội dung chi tiết
+# 📝 Nội dung chi tiết
 selected = grid_response["selected_rows"]
 if selected:
     st.markdown("#### 📝 Nội dung chi tiết:")
     st.info(selected[0]["Nội dung"])
 
-# Tổng chi phí
-tong_chi_phi = df
+# 💰 Tổng chi phí
+tong_chi_phi = df_ls["Chi phí"].sum()
+st.markdown(f"#### 💵 Tổng chi phí: `{tong_chi_phi:,.0f} VND`".replace(",", "."))
+
+# 📥 Xuất Excel
+output = BytesIO()
+with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    df_ls[["Biển số", "Ngày", "Nội dung", "Chi phí"]].to_excel(writer, index=False, sheet_name="LichSuBaoDuong")
+
+st.download_button(
+    label="📥 Xuất Excel",
+    data=output.getvalue(),
+    file_name=f"lich_su_bao_duong_{selected_bien_so}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
