@@ -148,7 +148,7 @@ if selected and "Nội dung" in selected[0]:
 
 # Tổng chi phí
 tong_chi_phi = df_ls["Chi phí"].str.replace(".", "", regex=False).astype(float).sum()
-st.markdown(f"#### 💵 Tổng chi phí: `{tong_chi_phi:,.0f} VND`")
+st.markdown(f"#### 💵 Tổng chi phí: `{f'{tong_chi_phi:,.0f}'.replace(',', '.')} VND`")
 
 # Xuất Excel
 output = BytesIO()
