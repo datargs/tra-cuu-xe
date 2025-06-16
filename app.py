@@ -28,13 +28,18 @@ st.title("🔧 Tra cứu lịch sử bảo dưỡng xe")
 bien_so_list = df_xe["Biển số"].dropna().unique().tolist()
 selected_bien_so = st.selectbox("📌 Chọn biển số xe:", sorted(bien_so_list))
 
-# Hiển thị thông tin xe
+# Hiển thị thông tin xe gọn trong bảng
 xe_info = df_xe[df_xe["Biển số"] == selected_bien_so].iloc[0]
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("🚗 Biển số", xe_info["Biển số"])
-col2.metric("🔧 Loại xe", xe_info["Loại xe"])
-col3.metric("📅 Năm sản xuất", f"{int(xe_info['Năm sản xuất'])}")
-col4.metric("📍 Trạng thái", xe_info["Trạng thái"])
+st.markdown("### 📄 Thông tin xe")
+st.table(pd.DataFrame({
+    "Thuộc tính": ["Biển số", "Loại xe", "Năm sản xuất", "Trạng thái"],
+    "Giá trị": [
+        xe_info["Biển số"],
+        xe_info["Loại xe"],
+        f"{int(xe_info['Năm sản xuất'])}",
+        xe_info["Trạng thái"]
+    ]
+}))
 
 # Hiển thị lịch bảo dưỡng tiếp theo
 st.markdown("### 📅 Lịch bảo dưỡng tiếp theo:")
