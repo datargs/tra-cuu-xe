@@ -1,42 +1,48 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import json
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Cấu hình giao diện
-st.set_page_config(page_title="Tra cứu xe", layout="wide")
-st.title("📋 Tra cứu bảo dưỡng xe")
+# ==== CẤU HÌNH GOOGLE SHEETS ====
+SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Đọc thông tin đăng nhập từ Streamlit secrets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = st.secrets["gcp_service_account"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
+@st.cache_resource
+def load_data():
+    # Lấy thông tin từ st.secrets
+    creds_dict = st.secrets["gcp_service_account"]
+    creds_json = json.loads(json.dumps(creds_dict))  # Chuyển sang JSON string nếu cần
 
-# Đọc Google Sheet
-sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, SCOPE)
+    client = gspread.authorize(creds)
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo/edit")
+    worksheet = sheet.sheet1
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
+    return df
 
-df_xe = pd.DataFrame(sheet.worksheet("Xe").get_all_records())
-df_bd = pd.DataFrame(sheet.worksheet("Bảo dưỡng").get_all_records())
-df_next = pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records())
+# ==== GIAO DIỆN ====
+st.set_page_config(page_title="Tra cứu bảo dưỡng xe", layout="wide")
+st.title("📋 Tra cứu lịch sử & lịch bảo dưỡng xe")
 
-# Giao diện người dùng
-bien_so = st.sidebar.selectbox("Chọn biển số", df_xe["Biển số"].unique())
-xe = df_xe[df_xe["Biển số"] == bien_so].iloc[0]
+df = load_data()
 
-st.subheader("🧾 Thông tin xe")
-st.markdown(f"- **Loại xe**: {xe['Loại xe']}")
-st.markdown(f"- **Năm sản xuất**: {xe['Năm sản xuất']}")
-st.markdown(f"- **Trạng thái**: {xe['Trạng thái']}")
+# Danh sách biển số duy nhất
+bien_so_list = sorted(df["Biển số"].unique())
 
-st.subheader("🛠 Lịch sử bảo dưỡng")
-lich_su = df_bd[df_bd["Biển số"] == bien_so]
-st.dataframe(lich_su)
+# Chọn biển số ngay trên đầu
+bien_so = st.selectbox("🔍 Chọn biển số xe để tra cứu:", bien_so_list)
 
-st.subheader("🕒 Bảo dưỡng tiếp theo")
-next_bd = df_next[df_next["Biển số"] == bien_so]
-if not next_bd.empty:
-    st.markdown(f"- **Dự kiến**: {next_bd.iloc[0]['Dự kiến lần tiếp theo']}")
-    st.markdown(f"- **Gợi ý nội dung**: {next_bd.iloc[0]['Gợi ý nội dung']}")
-else:
-    st.info("Chưa có lịch bảo dưỡng tiếp theo.")
+# ==== HIỂN THỊ KẾT QUẢ ====
+if bien_so:
+    df_selected = df[df["Biển số"] == bien_so]
+
+    st.subheader(f"📅 Lịch bảo dưỡng tiếp theo cho xe {bien_so}")
+    next_maint = df_selected["Bảo dưỡng tiếp theo"].dropna().unique()
+    if len(next_maint) > 0:
+        st.info(f"🔧 {next_maint[0]}")
+    else:
+        st.warning("Chưa có thông tin bảo dưỡng tiếp theo.")
+
+    st.subheader("📚 Lịch sử bảo dưỡng, sửa chữa:")
+    st.dataframe(df_selected.sort_values(by="Ngày", ascending=False), use_container_width=True)
