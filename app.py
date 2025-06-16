@@ -95,7 +95,7 @@ one_line_style = JsCode("""
 """)
 
 # Cột biển số, ngày, chi phí: không wrap
-gb.configure_column("Biển số", wrapText=False, autoHeight=False, width=80, cellStyle=one_line_style)
+gb.configure_column("Biển số", wrapText=False, autoHeight=False, width=90, cellStyle=one_line_style)
 gb.configure_column("Ngày", wrapText=False, autoHeight=False, width=100, cellStyle=one_line_style)
 gb.configure_column("Chi phí", wrapText=False, autoHeight=False, width=120, cellStyle=one_line_style)
 
