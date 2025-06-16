@@ -104,7 +104,7 @@ if selected:
 
 # Tổng chi phí
 tong_chi_phi = df_ls["Chi phí"].sum()
-st.markdown(f"#### 💵 Tổng chi phí bảo dưỡng: `{tong_chi_phi:,.0f} VND`")
+st.markdown(f"#### 💵 Tổng chi phí: `{tong_chi_phi:,.0f} VND`")
 
 # Xuất Excel
 output = BytesIO()
