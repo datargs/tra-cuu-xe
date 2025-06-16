@@ -77,17 +77,41 @@ if filter_btn and tu_ngay and den_ngay:
 df_ls["Ngày"] = df_ls["Ngày"].dt.strftime("%d/%m/%Y")
 df_ls["Chi phí"] = pd.to_numeric(df_ls["Chi phí"], errors="coerce").fillna(0)
 
-# Giao diện AgGrid
+from st_aggrid import JsCode
+
 gb = GridOptionsBuilder.from_dataframe(df_ls)
-gb.configure_column("Nội dung", wrapText=True, autoHeight=True, cellRenderer="""
+
+# Các cột hiển thị một dòng
+one_line_style = JsCode("""
     function(params) {
-        let val = params.value;
-        if (!val) return '';
-        return val.length > 50 ? val.substring(0, 50) + '...' : val;
+        return {
+            'white-space': 'nowrap',
+            'overflow': 'hidden',
+            'text-overflow': 'ellipsis'
+        }
     }
 """)
+
+# Cột biển số, ngày, chi phí: không wrap
+gb.configure_column("Biển số", wrapText=False, autoHeight=False, cellStyle=one_line_style)
+gb.configure_column("Ngày", wrapText=False, autoHeight=False, cellStyle=one_line_style)
+gb.configure_column("Chi phí", wrapText=False, autoHeight=False, cellStyle=one_line_style)
+
+# Cột nội dung: 1 dòng, dấu ba chấm
+gb.configure_column("Nội dung", wrapText=False, autoHeight=False, cellStyle=JsCode("""
+    function(params) {
+        return {
+            'white-space': 'nowrap',
+            'overflow': 'hidden',
+            'text-overflow': 'ellipsis',
+            'maxWidth': '250px'
+        };
+    }
+"""))
+
 gb.configure_grid_options(domLayout='normal', suppressRowClickSelection=False)
 grid_options = gb.build()
+
 
 st.markdown("### 📑 Chi tiết lịch sử bảo dưỡng")
 grid_response = AgGrid(
