@@ -119,6 +119,19 @@ grid_response = AgGrid(
     update_mode=GridUpdateMode.SELECTION_CHANGED,
     allow_unsafe_jscode=True,
 )
+st.markdown("""
+<div style="
+    background-color: #e8f0fe;
+    padding: 10px;
+    border-left: 4px solid #1a73e8;
+    border-radius: 5px;
+    font-weight: 500;
+    color: #1a1a1a;
+    margin-bottom: 10px;
+">
+👉 <b>Bấm vào ô <i>Nội dung</i> để xem chi tiết phía dưới.</b>
+</div>
+""", unsafe_allow_html=True)
 
 
 
