@@ -17,7 +17,7 @@ creds = service_account.Credentials.from_service_account_info(
 )
 gc = gspread.authorize(creds)
 sheet = gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
-
+st.write(st.secrets["gcp_service_account"]["client_email"])
 # 📄 Đọc dữ liệu
 df_xe = pd.DataFrame(sheet.worksheet("Xe").get_all_records())
 df_ls = pd.DataFrame(sheet.worksheet("Lịch sử bảo dưỡng").get_all_records())
@@ -179,4 +179,4 @@ st.download_button(
     file_name=f"lich_su_bao_duong_{selected_bien_so}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-st.write(st.secrets["gcp_service_account"]["client_email"])
+
