@@ -179,3 +179,4 @@ st.download_button(
     file_name=f"lich_su_bao_duong_{selected_bien_so}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+st.write(st.secrets["gcp_service_account"]["client_email"])
