@@ -91,7 +91,7 @@ else:
 # =========================================
 #  LỊCH SỬ BẢO DƯỠNG
 # =========================================
-st.markdown("### 📋 Lịch sử bảo dưỡng")
+st.markdown("### Lịch sử bảo dưỡng")
 
 col_tu, col_den, col_xem = st.columns([2, 2, 1])
 tu_ngay = col_tu.date_input("Từ ngày (DD/MM/YYYY)", format="DD/MM/YYYY", value=None)
