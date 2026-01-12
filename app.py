@@ -233,29 +233,51 @@ with tab_user:
     df_ls_view["Ngày"] = df_ls_view["Ngày"].dt.strftime("%d/%m/%Y")
     df_ls_view["Chi phí"] = pd.to_numeric(df_ls_view["Chi phí"], errors="coerce").fillna(0)
     df_ls_view["Chi phí hiển thị"] = df_ls_view["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
-    # 📋 Hiển thị bảng lịch sử bảo dưỡng
-    gb = GridOptionsBuilder.from_dataframe(
-    df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]]
-    )
+    cols = ["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]
 
+    gb = GridOptionsBuilder.from_dataframe(df_ls_view[cols])
+
+    # Cấu hình chung
     gb.configure_default_column(
         wrapText=True,
         autoHeight=True,
-        resizable=True
+        resizable=True,
+        sortable=True
     )
 
+    # 🔑 BIỂN SỐ – luôn hiện
     gb.configure_column(
-        "Nội dung",
-        width=400,
+        "Biển số",
+        minWidth=110,
+        maxWidth=130,
+        pinned="left",
         suppressSizeToFit=True
     )
 
+    # 🔑 NGÀY – luôn hiện
+    gb.configure_column(
+        "Ngày",
+        minWidth=100,
+        maxWidth=120,
+        pinned="left",
+        suppressSizeToFit=True
+    )
+
+    # 📄 NỘI DUNG – cho phép co giãn
+    gb.configure_column(
+        "Nội dung",
+        minWidth=300,
+        flex=1
+    )
+
+    # 💰 CHI PHÍ – luôn hiện bên phải
     gb.configure_column(
         "Chi phí hiển thị",
         headerName="Chi phí",
-        width=130,
-        pinned="right",          # 🔥 GHIM CỘT BÊN PHẢI
-        suppressSizeToFit=True   # 🔥 KHÔNG CHO TỰ ẨN
+        minWidth=120,
+        maxWidth=140,
+        pinned="right",
+        suppressSizeToFit=True
     )
 
     gb.configure_grid_options(
@@ -263,14 +285,13 @@ with tab_user:
         suppressColumnVirtualisation=True
     )
 
-
     AgGrid(
-        df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]],
+        df_ls_view[cols],
         gridOptions=gb.build(),
         update_mode=GridUpdateMode.NO_UPDATE,
         allow_unsafe_jscode=True,
-        fit_columns_on_grid_load=True,
-        height=300
+        fit_columns_on_grid_load=False,  # ❗ CỰC KỲ QUAN TRỌNG
+        height=320
     )
 
     # 💰 Tổng chi phí
