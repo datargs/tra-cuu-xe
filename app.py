@@ -105,7 +105,7 @@ if st.session_state.access_info is None:
 
     st.stop()
 
-data = load_sheet_data(sheet)
+data = load_sheet_data()
 
 df_xe = data["xe"]
 df_ls = data["ls"]
