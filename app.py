@@ -10,14 +10,24 @@ import random
 import string
 from google.oauth2.service_account import Credentials
 ADMIN_KEY = "admin"
+def now_vn():
+    return datetime.utcnow() + timedelta(hours=7)
 
-def get_remaining_hours(cap_time_str):
+def get_remaining_time(cap_time_str):
     try:
         cap_time = datetime.strptime(cap_time_str, "%Y-%m-%d %H:%M")
-        remain = cap_time + timedelta(hours=24) - datetime.now()
-        return int(remain.total_seconds() // 3600)
+        remain = (cap_time + timedelta(hours=24)) - now_vn()
+
+        if remain.total_seconds() <= 0:
+            return "Hết hạn"
+
+        total_minutes = int(remain.total_seconds() // 60)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+
+        return f"Còn {hours} giờ {minutes} phút"
     except:
-        return -1
+        return "—"
 
 def gen_access_code(length=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
@@ -59,7 +69,7 @@ def create_access_code(sheet, bien_so):
     ws = sheet.worksheet("CapPhep")
 
     new_code = gen_access_code()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = now_vn().strftime("%Y-%m-%d %H:%M")
 
     ws.append_row([new_code, bien_so, now_str])
 
@@ -95,7 +105,7 @@ if st.session_state.access_info is None:
                 row.iloc[0]["ThoiDiemCap"], "%Y-%m-%d %H:%M"
             )
 
-            if datetime.now() > cap_time + timedelta(hours=24):
+            if now_vn() > cap_time + timedelta(hours=24):
                 st.error("Mã truy cập đã hết hạn (24h)")
             else:
                 st.session_state.access_info = {
@@ -134,6 +144,16 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
         if df_cap.empty:
             st.info("Chưa có mã truy cập nào.")
         else:
+            st.markdown("### Danh sách mã truy cập (trừ admin – vĩnh viễn)")
+            # ===== HEADER CỘT =====
+            h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 2, 1])
+            h1.markdown("**Mã truy cập**")
+            h2.markdown("**Biển số**")
+            h3.markdown("**Thời điểm cấp**")
+            h4.markdown("**Thời gian còn lại**")
+            h5.markdown("**Thao tác**")
+            st.divider()
+
             for idx, r in df_cap[df_cap["MaTruyCap"] != ADMIN_KEY].iterrows():
                 col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
 
@@ -142,10 +162,7 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
                 col1.write(r["MaTruyCap"])
                 col2.write(r["BienSo"])
                 col3.write(r["ThoiDiemCap"])
-                col4.write(
-                    "Hết hạn" if remain_hours <= 0 else f"Còn {remain_hours} giờ"
-                )
-
+                col4.write(get_remaining_time(r["ThoiDiemCap"]))
                 # 🔥 NÚT THU HỒI THEO DÒNG
                 if r["MaTruyCap"] != ADMIN_KEY:
                     if col5.button("❌ Thu hồi", key=f"revoke_{r['MaTruyCap']}"):
