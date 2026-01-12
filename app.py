@@ -37,6 +37,14 @@ def get_gsheet():
     return gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
 
 sheet = get_gsheet()
+@st.cache_data(ttl=300)
+def load_sheet_data(sheet):
+    return {
+        "xe": pd.DataFrame(sheet.worksheet("Xe").get_all_records()),
+        "ls": pd.DataFrame(sheet.worksheet("Lịch sử bảo dưỡng").get_all_records()),
+        "next": pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records()),
+        "cap": pd.DataFrame(sheet.worksheet("CapPhep").get_all_records()),
+    }
 
 def create_access_code(sheet, bien_so):
     ws = sheet.worksheet("CapPhep")
@@ -47,12 +55,6 @@ def create_access_code(sheet, bien_so):
     ws.append_row([new_code, bien_so, now_str])
 
     return new_code, now_str
-
-# 📄 Đọc dữ liệu
-df_xe = pd.DataFrame(sheet.worksheet("Xe").get_all_records())
-df_ls = pd.DataFrame(sheet.worksheet("Lịch sử bảo dưỡng").get_all_records())
-df_next = pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records())
-df_cap = pd.DataFrame(sheet.worksheet("CapPhep").get_all_records())
 
 st.title("Tra cứu lịch sử bảo dưỡng xe")
 # 🔐 KIỂM TRA MÃ TRUY CẬP (có hạn 24h)
@@ -95,6 +97,12 @@ if st.session_state.access_info is None:
                 st.experimental_rerun()
 
     st.stop()
+data = load_sheet_data(sheet)
+
+df_xe = data["xe"]
+df_ls = data["ls"]
+df_next = data["next"]
+df_cap = data["cap"]
 
 # 🔎 Xác định biển số được phép xem
 if st.session_state.access_info["bien_so"] == "ALL":
