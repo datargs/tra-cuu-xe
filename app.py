@@ -175,78 +175,78 @@ if st.session_state.access_info["code"] == "ADMIN":
             """)
             st.cache_data.clear()
             st.experimental_rerun()
-    with tab_user:
-        # 🔒 Lọc dữ liệu theo quyền truy cập
-        df_xe = df_xe[df_xe["Biển số"].isin(bien_so_duoc_xem)]
-        df_ls = df_ls[df_ls["Biển số"].isin(bien_so_duoc_xem)]
-        df_next = df_next[df_next["Biển số"].isin(bien_so_duoc_xem)]
+with tab_user:
+    # 🔒 Lọc dữ liệu theo quyền truy cập
+    df_xe = df_xe[df_xe["Biển số"].isin(bien_so_duoc_xem)]
+    df_ls = df_ls[df_ls["Biển số"].isin(bien_so_duoc_xem)]
+    df_next = df_next[df_next["Biển số"].isin(bien_so_duoc_xem)]
 
-        bien_so_list_sorted = sorted(bien_so_duoc_xem)
+    bien_so_list_sorted = sorted(bien_so_duoc_xem)
 
-        # Khởi tạo session_state nếu chưa có
-        if "selected_bien_so" not in st.session_state:
-            st.session_state.selected_bien_so = bien_so_list_sorted[0]
+    # Khởi tạo session_state nếu chưa có
+    if "selected_bien_so" not in st.session_state:
+        st.session_state.selected_bien_so = bien_so_list_sorted[0]
 
-        selected_bien_so = st.selectbox(
-            "Chọn biển số xe:",
-            bien_so_list_sorted,
-            index=bien_so_list_sorted.index(st.session_state.selected_bien_so)
+    selected_bien_so = st.selectbox(
+        "Chọn biển số xe:",
+        bien_so_list_sorted,
+        index=bien_so_list_sorted.index(st.session_state.selected_bien_so)
+    )
+
+    st.session_state.selected_bien_so = selected_bien_so
+    # 📄 Hiển thị thông tin xe
+    xe_info = df_xe[df_xe["Biển số"] == selected_bien_so].iloc[0]
+    nam_sx_raw = xe_info.get("Năm sản xuất", "")
+    try:
+        nam_sx = int(float(nam_sx_raw))
+    except:
+        nam_sx = "Chưa cập nhật"
+
+    st.markdown("### Thông tin xe")
+    st.markdown(f"""
+    <table style="border-collapse: collapse; width: 100%;">
+      <tr><td><b>🚗 Biển số</b></td><td>{xe_info['Biển số']}</td></tr>
+      <tr><td><b>🔧 Loại xe</b></td><td>{xe_info['Loại xe']}</td></tr>
+      <tr><td><b>📅 Năm sản xuất</b></td><td>{nam_sx}</td></tr>
+      <tr><td><b>📍 Trạng thái</b></td><td>{xe_info['Trạng thái']}</td></tr>
+    </table>
+    """, unsafe_allow_html=True)
+
+    # 📅 Lịch bảo dưỡng tiếp theo
+    st.markdown("### Lịch bảo dưỡng tiếp theo")
+    df_next_filtered = df_next[df_next["Biển số"] == selected_bien_so]
+    if not df_next_filtered.empty:
+        st.write(f"- **Dự kiến:** {df_next_filtered.iloc[0]['Dự kiến lần tiếp theo']}")
+        st.write(f"- **Gợi ý nội dung:** {df_next_filtered.iloc[0]['Gợi ý nội dung']}")
+    else:
+        st.warning("Chưa có lịch bảo dưỡng tiếp theo.")
+
+    # 📆 Lịch sử bảo dưỡng
+    st.markdown("### Lịch sử bảo dưỡng")
+    df_ls_view = df_ls[df_ls["Biển số"] == selected_bien_so].copy()
+
+    df_ls_view["Ngày"] = pd.to_datetime(df_ls_view["Ngày"], errors="coerce")
+    df_ls_view = df_ls_view.dropna(subset=["Ngày"])
+
+    df_ls_view["Ngày"] = df_ls_view["Ngày"].dt.strftime("%d/%m/%Y")
+    df_ls_view["Chi phí"] = pd.to_numeric(df_ls_view["Chi phí"], errors="coerce").fillna(0)
+    df_ls_view["Chi phí hiển thị"] = df_ls_view["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+
+    # 💰 Tổng chi phí
+    tong_chi_phi = df_ls_view["Chi phí"].sum()
+    st.markdown(f"#### Tổng chi phí: `{tong_chi_phi:,.0f} VND`".replace(",", "."))
+
+    # 📥 Xuất Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí"]].to_excel(
+            writer, index=False, sheet_name="LichSuBaoDuong"
         )
 
-        st.session_state.selected_bien_so = selected_bien_so
-        # 📄 Hiển thị thông tin xe
-        xe_info = df_xe[df_xe["Biển số"] == selected_bien_so].iloc[0]
-        nam_sx_raw = xe_info.get("Năm sản xuất", "")
-        try:
-            nam_sx = int(float(nam_sx_raw))
-        except:
-            nam_sx = "Chưa cập nhật"
-
-        st.markdown("### Thông tin xe")
-        st.markdown(f"""
-        <table style="border-collapse: collapse; width: 100%;">
-          <tr><td><b>🚗 Biển số</b></td><td>{xe_info['Biển số']}</td></tr>
-          <tr><td><b>🔧 Loại xe</b></td><td>{xe_info['Loại xe']}</td></tr>
-          <tr><td><b>📅 Năm sản xuất</b></td><td>{nam_sx}</td></tr>
-          <tr><td><b>📍 Trạng thái</b></td><td>{xe_info['Trạng thái']}</td></tr>
-        </table>
-        """, unsafe_allow_html=True)
-
-        # 📅 Lịch bảo dưỡng tiếp theo
-        st.markdown("### Lịch bảo dưỡng tiếp theo")
-        df_next_filtered = df_next[df_next["Biển số"] == selected_bien_so]
-        if not df_next_filtered.empty:
-            st.write(f"- **Dự kiến:** {df_next_filtered.iloc[0]['Dự kiến lần tiếp theo']}")
-            st.write(f"- **Gợi ý nội dung:** {df_next_filtered.iloc[0]['Gợi ý nội dung']}")
-        else:
-            st.warning("Chưa có lịch bảo dưỡng tiếp theo.")
-
-        # 📆 Lịch sử bảo dưỡng
-        st.markdown("### Lịch sử bảo dưỡng")
-        df_ls_view = df_ls[df_ls["Biển số"] == selected_bien_so].copy()
-
-        df_ls_view["Ngày"] = pd.to_datetime(df_ls_view["Ngày"], errors="coerce")
-        df_ls_view = df_ls_view.dropna(subset=["Ngày"])
-
-        df_ls_view["Ngày"] = df_ls_view["Ngày"].dt.strftime("%d/%m/%Y")
-        df_ls_view["Chi phí"] = pd.to_numeric(df_ls_view["Chi phí"], errors="coerce").fillna(0)
-        df_ls_view["Chi phí hiển thị"] = df_ls_view["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
-
-        # 💰 Tổng chi phí
-        tong_chi_phi = df_ls_view["Chi phí"].sum()
-        st.markdown(f"#### Tổng chi phí: `{tong_chi_phi:,.0f} VND`".replace(",", "."))
-
-        # 📥 Xuất Excel
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí"]].to_excel(
-                writer, index=False, sheet_name="LichSuBaoDuong"
-            )
-
-        st.download_button(
-            "📥 Xuất Excel",
-            data=output.getvalue(),
-            file_name=f"lich_su_bao_duong_{selected_bien_so}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    st.download_button(
+        "📥 Xuất Excel",
+        data=output.getvalue(),
+        file_name=f"lich_su_bao_duong_{selected_bien_so}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
