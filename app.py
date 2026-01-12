@@ -10,6 +10,7 @@ import random
 import string
 from google.oauth2.service_account import Credentials
 ADMIN_KEY = "admin"
+
 def get_remaining_hours(cap_time_str):
     try:
         cap_time = datetime.strptime(cap_time_str, "%Y-%m-%d %H:%M")
@@ -23,6 +24,7 @@ def gen_access_code(length=6):
 
 # ⚙️ Cấu hình Streamlit (PHẢI đặt ở đầu!)
 st.set_page_config(page_title="Tra cứu lịch bảo dưỡng", layout="wide")
+is_mobile = st.session_state.get("is_mobile_width", 1200) < 700
 
 @st.cache_resource
 def get_gsheet():
@@ -233,66 +235,49 @@ with tab_user:
     df_ls_view["Ngày"] = df_ls_view["Ngày"].dt.strftime("%d/%m/%Y")
     df_ls_view["Chi phí"] = pd.to_numeric(df_ls_view["Chi phí"], errors="coerce").fillna(0)
     df_ls_view["Chi phí hiển thị"] = df_ls_view["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
-    cols = ["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]
+    if is_mobile:
+        st.markdown("#### 📱 Lịch sử bảo dưỡng (mobile)")
 
-    gb = GridOptionsBuilder.from_dataframe(df_ls_view[cols])
+        # Bảng gọn
+        st.dataframe(
+            df_ls_view[["Biển số", "Ngày", "Chi phí hiển thị"]],
+            use_container_width=True,
+            hide_index=True
+        )
 
-    # Cấu hình chung
-    gb.configure_default_column(
-        wrapText=True,
-        autoHeight=True,
-        resizable=True,
-        sortable=True
-    )
+        # Chi tiết từng dòng
+        st.markdown("#### 🔍 Chi tiết")
+        for _, r in df_ls_view.iterrows():
+            with st.expander(f"{r['Ngày']} – {r['Chi phí hiển thị']} VND"):
+                st.write(r["Nội dung"])
+    else:
+        cols = ["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]
 
-    # 🔑 BIỂN SỐ – luôn hiện
-    gb.configure_column(
-        "Biển số",
-        minWidth=110,
-        maxWidth=130,
-        pinned="left",
-        suppressSizeToFit=True
-    )
+        gb = GridOptionsBuilder.from_dataframe(df_ls_view[cols])
 
-    # 🔑 NGÀY – luôn hiện
-    gb.configure_column(
-        "Ngày",
-        minWidth=100,
-        maxWidth=120,
-        pinned="left",
-        suppressSizeToFit=True
-    )
+        gb.configure_default_column(
+            wrapText=True,
+            autoHeight=True,
+            resizable=True,
+            sortable=True
+        )
 
-    # 📄 NỘI DUNG – cho phép co giãn
-    gb.configure_column(
-        "Nội dung",
-        minWidth=300,
-        flex=1
-    )
+        gb.configure_column("Biển số", width=120)
+        gb.configure_column("Ngày", width=120)
+        gb.configure_column("Nội dung", flex=1)
+        gb.configure_column(
+            "Chi phí hiển thị",
+            headerName="Chi phí",
+            width=140
+        )
 
-    # 💰 CHI PHÍ – luôn hiện bên phải
-    gb.configure_column(
-        "Chi phí hiển thị",
-        headerName="Chi phí",
-        minWidth=120,
-        maxWidth=140,
-        pinned="right",
-        suppressSizeToFit=True
-    )
-
-    gb.configure_grid_options(
-        domLayout="normal",
-        suppressColumnVirtualisation=True
-    )
-
-    AgGrid(
-        df_ls_view[cols],
-        gridOptions=gb.build(),
-        update_mode=GridUpdateMode.NO_UPDATE,
-        allow_unsafe_jscode=True,
-        fit_columns_on_grid_load=False,  # ❗ CỰC KỲ QUAN TRỌNG
-        height=320
-    )
+        AgGrid(
+            df_ls_view[cols],
+            gridOptions=gb.build(),
+            update_mode=GridUpdateMode.NO_UPDATE,
+            fit_columns_on_grid_load=True,
+            height=350
+        )
 
     # 💰 Tổng chi phí
     tong_chi_phi = df_ls_view["Chi phí"].sum()
