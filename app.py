@@ -94,7 +94,7 @@ if st.session_state.access_info is None:
             )
 
             if datetime.now() > cap_time + timedelta(hours=24):
-                st.error("⏰ Mã truy cập đã hết hạn (24h)")
+                st.error("Mã truy cập đã hết hạn (24h)")
             else:
                 st.session_state.access_info = {
                     "code": code,
@@ -124,7 +124,7 @@ else:
     tab_user, = st.tabs(["Tra cứu xe"])
 if st.session_state.access_info["code"] == "ADMIN":
     with tab_admin:
-        st.markdown("## 🛠️ Quản lý mã đăng nhập")
+        st.markdown("## Quản lý mã đăng nhập")
 
         ws_cap = sheet.worksheet("CapPhep")
         df_cap = pd.DataFrame(ws_cap.get_all_records())
@@ -167,7 +167,7 @@ if st.session_state.access_info["code"] == "ADMIN":
         if st.button("Tạo mã truy cập"):
             new_code, cap_time = create_access_code(sheet, bien_so_cap)
             st.success(f"""
-            ✅ Đã tạo mã thành công  
+            Đã tạo mã thành công  
             **Mã:** `{new_code}`  
             **Biển số:** {bien_so_cap}  
             **Cấp lúc:** {cap_time}  
@@ -194,21 +194,6 @@ if st.session_state.access_info["code"] == "ADMIN":
         )
 
         st.session_state.selected_bien_so = selected_bien_so
-# Khởi tạo session_state nếu chưa có
-if "selected_bien_so" not in st.session_state:
-    st.session_state.selected_bien_so = bien_so_list_sorted[0]  # mặc định là xe đầu tiên
-
-# Hiển thị selectbox với giá trị được lưu trong session
-selected_bien_so = st.selectbox(
-    "Chọn biển số xe:",
-    bien_so_list_sorted,
-    index=bien_so_list_sorted.index(st.session_state.selected_bien_so)
-)
-
-# Cập nhật session_state nếu người dùng chọn mới
-st.session_state.selected_bien_so = selected_bien_so
-
-
 # 📄 Hiển thị thông tin xe
 xe_info = df_xe[df_xe["Biển số"] == selected_bien_so].iloc[0]
 nam_sx_raw = xe_info.get("Năm sản xuất", "")
