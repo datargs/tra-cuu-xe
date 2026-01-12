@@ -64,6 +64,17 @@ if st.session_state.access_info is None:
 
     code = st.text_input("Mã truy cập", type="password")
     if st.button("Xác nhận"):
+
+        # 🔑 ADMIN vào thẳng
+        if code == "ADMIN":
+            st.session_state.access_info = {
+                "code": "ADMIN",
+                "bien_so": "ALL",
+                "cap_time": datetime.now()
+            }
+            st.experimental_rerun()
+
+        # 🔐 Mã thường
         row = df_cap[df_cap["MaTruyCap"] == code]
 
         if row.empty:
@@ -81,6 +92,8 @@ if st.session_state.access_info is None:
                     "bien_so": row.iloc[0]["BienSo"],
                     "cap_time": cap_time
                 }
+                st.experimental_rerun()
+
     st.stop()
 
 # 🔎 Xác định biển số được phép xem
