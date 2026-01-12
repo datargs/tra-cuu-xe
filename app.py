@@ -157,8 +157,6 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
             for idx, r in df_cap[df_cap["MaTruyCap"] != ADMIN_KEY].iterrows():
                 col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
 
-                remain_hours = get_remaining_hours(r["ThoiDiemCap"])
-
                 col1.write(r["MaTruyCap"])
                 col2.write(r["BienSo"])
                 col3.write(r["ThoiDiemCap"])
