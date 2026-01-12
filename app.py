@@ -117,11 +117,19 @@ st.session_state.selected_bien_so = selected_bien_so
 
 # 📄 Hiển thị thông tin xe
 xe_info = df_xe[df_xe["Biển số"] == selected_bien_so].iloc[0]
+nam_sx_raw = xe_info.get("Năm sản xuất", "")
+try:
+    nam_sx = int(float(nam_sx_raw))
+except:
+    nam_sx = "Chưa cập nhật"
 thong_tin_html = f"""
 <table style="border-collapse: collapse; width: 100%;">
   <tr><td style="padding: 6px;"><b>🚗 Biển số</b></td><td style="padding: 6px;">{xe_info['Biển số']}</td></tr>
   <tr><td style="padding: 6px;"><b>🔧 Loại xe</b></td><td style="padding: 6px;">{xe_info['Loại xe']}</td></tr>
-  <tr><td style="padding: 6px;"><b>📅 Năm sản xuất</b></td><td style="padding: 6px;">{int(xe_info['Năm sản xuất'])}</td></tr>
+    <tr>
+      <td style="padding: 6px;"><b>📅 Năm sản xuất</b></td>
+      <td style="padding: 6px;">{nam_sx}</td>
+    </tr>
   <tr><td style="padding: 6px;"><b>📍 Trạng thái</b></td><td style="padding: 6px;">{xe_info['Trạng thái']}</td></tr>
 </table>
 """
