@@ -5,7 +5,7 @@ from google.oauth2 import service_account
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
 from io import BytesIO
 import xlsxwriter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 import string
 from google.oauth2.service_account import Credentials
@@ -144,7 +144,7 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
         if df_cap.empty:
             st.info("Chưa có mã truy cập nào.")
         else:
-            st.markdown("###")
+            st.markdown("### Danh sách mã truy cập (trừ admin – vĩnh viễn)")
             # ===== HEADER CỘT =====
             h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 2, 1])
             h1.markdown("**Mã truy cập**")
@@ -159,7 +159,10 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
 
                 col1.write(r["MaTruyCap"])
                 col2.write(r["BienSo"])
-                col3.write(r["ThoiDiemCap"])
+                cap_time = datetime.strptime(r["ThoiDiemCap"], "%Y-%m-%d %H:%M")
+                cap_time = cap_time.replace(tzinfo=timezone.utc) + timedelta(hours=7)
+                cap_time_str = cap_time.strftime("%d - %m - %Y - %H:%M")
+                col3.write(cap_time_str)
                 col4.write(get_remaining_time(r["ThoiDiemCap"]))
                 # 🔥 NÚT THU HỒI THEO DÒNG
                 if r["MaTruyCap"] != ADMIN_KEY:
