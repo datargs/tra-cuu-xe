@@ -122,7 +122,7 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
     tab_admin, tab_user = st.tabs(["Quản lý mã đăng nhập", "Tra cứu xe"])
 else:
     tab_user, = st.tabs(["Tra cứu xe"])
-if st.session_state.access_info["code"] == "admin":
+if st.session_state.access_info["code"] == ADMIN_KEY:
     with tab_admin:
         st.markdown("## Quản lý mã đăng nhập")
 
@@ -233,6 +233,23 @@ with tab_user:
     df_ls_view["Ngày"] = df_ls_view["Ngày"].dt.strftime("%d/%m/%Y")
     df_ls_view["Chi phí"] = pd.to_numeric(df_ls_view["Chi phí"], errors="coerce").fillna(0)
     df_ls_view["Chi phí hiển thị"] = df_ls_view["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+    # 📋 Hiển thị bảng lịch sử bảo dưỡng
+    gb = GridOptionsBuilder.from_dataframe(
+        df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]]
+    )
+    gb.configure_default_column(wrapText=True, autoHeight=True)
+    gb.configure_column("Nội dung", width=500)
+    gb.configure_column("Chi phí hiển thị", headerName="Chi phí")
+    gb.configure_grid_options(domLayout="normal")
+
+    AgGrid(
+        df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]],
+        gridOptions=gb.build(),
+        update_mode=GridUpdateMode.NO_UPDATE,
+        allow_unsafe_jscode=True,
+        fit_columns_on_grid_load=True,
+        height=300
+    )
 
     # 💰 Tổng chi phí
     tong_chi_phi = df_ls_view["Chi phí"].sum()
