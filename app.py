@@ -40,7 +40,7 @@ df_next = load_sheet("Lịch bảo dưỡng tiếp theo")
 # ======================================================
 #  GIAO DIỆN
 # ======================================================
-st.title("🔧 Tra cứu lịch sử bảo dưỡng xe")
+st.title("Tra cứu lịch sử bảo dưỡng xe")
 
 # Tạo danh sách biển số
 bien_so_list = df_xe["Biển số"].dropna().unique().tolist()
@@ -50,7 +50,7 @@ if "selected_bien_so" not in st.session_state:
     st.session_state.selected_bien_so = bien_so_list_sorted[0]
 
 selected_bien_so = st.selectbox(
-    "📌 Chọn biển số xe:",
+    "Chọn biển số xe:",
     bien_so_list_sorted,
     index=bien_so_list_sorted.index(st.session_state.selected_bien_so)
 )
@@ -75,11 +75,11 @@ thong_tin_html = f"""
   <tr><td style="padding: 6px;"><b>📍 Trạng thái</b></td><td style="padding: 6px;">{xe_info['Trạng thái']}</td></tr>
 </table>
 """
-st.markdown("### 📄 Thông tin xe")
+st.markdown("### Thông tin xe")
 st.markdown(thong_tin_html, unsafe_allow_html=True)
 
 # 📅 Lịch bảo dưỡng tiếp theo
-st.markdown("### 📅 Lịch bảo dưỡng tiếp theo:")
+st.markdown("### Lịch bảo dưỡng tiếp theo:")
 df_next_filtered = df_next[df_next["Biển số"] == selected_bien_so]
 
 if not df_next_filtered.empty:
@@ -164,12 +164,12 @@ st.markdown("""
 # 📝 Chi tiết
 selected = grid_response.get("selected_rows", [])
 if selected:
-    st.markdown("#### 📝 Nội dung chi tiết:")
+    st.markdown("#### Nội dung chi tiết:")
     st.info(selected[0]["Nội dung"])
 
 # 💰 Tổng chi phí
 tong_chi_phi = df_ls["Chi phí"].sum()
-st.markdown(f"#### 💵 Tổng chi phí: `{tong_chi_phi:,.0f} VND`".replace(",", "."))
+st.markdown(f"#### Tổng chi phí: `{tong_chi_phi:,.0f} VND`".replace(",", "."))
 
 # 📥 Xuất Excel
 output = BytesIO()
