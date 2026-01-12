@@ -34,7 +34,7 @@ def get_gsheet():
         scopes=scope
     )
     gc = gspread.authorize(creds)
-    return gc.open_by_key("1vVCCoKCuRZZLx6QrpGKM8b067F-p8QKYVbkc1yavo")
+    return gc.open_by_key("1vVwCCoKCuRZZLx6QrprgKM8b067F-p8QKYVbkc1yavo")
 
 sheet = get_gsheet()
 
