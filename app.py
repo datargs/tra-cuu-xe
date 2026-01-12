@@ -160,7 +160,7 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
                 col1.write(r["MaTruyCap"])
                 col2.write(r["BienSo"])
                 cap_time = datetime.strptime(r["ThoiDiemCap"], "%Y-%m-%d %H:%M")
-                cap_time = cap_time.replace(tzinfo=timezone.utc) + timedelta(hours=7)
+                cap_time = cap_time.replace(tzinfo=timezone.utc) + timedelta(hours=0)
                 cap_time_str = cap_time.strftime("%d - %m - %Y - %H:%M")
                 col3.write(cap_time_str)
                 col4.write(get_remaining_time(r["ThoiDiemCap"]))
