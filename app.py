@@ -235,12 +235,34 @@ with tab_user:
     df_ls_view["Chi phí hiển thị"] = df_ls_view["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
     # 📋 Hiển thị bảng lịch sử bảo dưỡng
     gb = GridOptionsBuilder.from_dataframe(
-        df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]]
+    df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]]
     )
-    gb.configure_default_column(wrapText=True, autoHeight=True)
-    gb.configure_column("Nội dung", width=500)
-    gb.configure_column("Chi phí hiển thị", headerName="Chi phí")
-    gb.configure_grid_options(domLayout="normal")
+
+    gb.configure_default_column(
+        wrapText=True,
+        autoHeight=True,
+        resizable=True
+    )
+
+    gb.configure_column(
+        "Nội dung",
+        width=400,
+        suppressSizeToFit=True
+    )
+
+    gb.configure_column(
+        "Chi phí hiển thị",
+        headerName="Chi phí",
+        width=130,
+        pinned="right",          # 🔥 GHIM CỘT BÊN PHẢI
+        suppressSizeToFit=True   # 🔥 KHÔNG CHO TỰ ẨN
+    )
+
+    gb.configure_grid_options(
+        domLayout="normal",
+        suppressColumnVirtualisation=True
+    )
+
 
     AgGrid(
         df_ls_view[["Biển số", "Ngày", "Nội dung", "Chi phí hiển thị"]],
