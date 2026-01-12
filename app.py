@@ -45,6 +45,9 @@ def load_sheet_data(sheet):
         "next": pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records()),
         "cap": pd.DataFrame(sheet.worksheet("CapPhep").get_all_records()),
     }
+@st.cache_data(ttl=300)
+def load_cap_phep(sheet):
+    return pd.DataFrame(sheet.worksheet("CapPhep").get_all_records())
 
 def create_access_code(sheet, bien_so):
     ws = sheet.worksheet("CapPhep")
@@ -67,7 +70,7 @@ if st.session_state.access_info is None:
     code = st.text_input("Mã truy cập", type="password")
     if st.button("Xác nhận"):
 
-        # 🔑 ADMIN vào thẳng
+        # 🔑 ADMIN vào thẳng (KHÔNG dùng df_cap)
         if code == "ADMIN":
             st.session_state.access_info = {
                 "code": "ADMIN",
@@ -76,8 +79,10 @@ if st.session_state.access_info is None:
             }
             st.experimental_rerun()
 
-        # 🔐 Mã thường
-        row = df_cap[df_cap["MaTruyCap"] == code]
+        # 🔐 Mã thường → load riêng CapPhep
+        df_cap_tmp = load_cap_phep(sheet)
+
+        row = df_cap_tmp[df_cap_tmp["MaTruyCap"] == code]
 
         if row.empty:
             st.error("❌ Mã truy cập không tồn tại")
@@ -97,6 +102,7 @@ if st.session_state.access_info is None:
                 st.experimental_rerun()
 
     st.stop()
+
 data = load_sheet_data(sheet)
 
 df_xe = data["xe"]
