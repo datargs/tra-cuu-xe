@@ -119,72 +119,81 @@ else:
     bien_so_duoc_xem = [st.session_state.access_info["bien_so"]]
 # 🛠️ KHU VỰC QUẢN TRỊ – CHỈ ADMIN
 if st.session_state.access_info["code"] == "ADMIN":
-    st.markdown("## 🛠️ Quản trị – Cấp mã truy cập")
-    
-    st.markdown("## Danh sách mã truy cập đang còn hiệu lực")
+    tab_admin, tab_user = st.tabs(["Quản lý mã đăng nhập", "Tra cứu xe"])
+else:
+    tab_user, = st.tabs(["Tra cứu xe"])
+if st.session_state.access_info["code"] == "ADMIN":
+    with tab_admin:
+        st.markdown("## 🛠️ Quản lý mã đăng nhập")
 
-    ws_cap = sheet.worksheet("CapPhep")
-    df_cap = pd.DataFrame(ws_cap.get_all_records())
-    st.markdown("## Thu hồi mã truy cập")
+        ws_cap = sheet.worksheet("CapPhep")
+        df_cap = pd.DataFrame(ws_cap.get_all_records())
 
-    ma_thu_hoi = st.text_input("Nhập mã cần thu hồi")
+        if df_cap.empty:
+            st.info("Chưa có mã truy cập nào.")
+        else:
+            st.markdown("### Danh sách mã truy cập (trừ ADMIN – vĩnh viễn)")
 
-    if st.button("Thu hồi ngay"):
-        data = ws_cap.get_all_values()
-        found = False
+            for idx, r in df_cap.iterrows():
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
 
-        for i, row in enumerate(data[1:], start=2):  # bỏ header
-            if row[0] == ma_thu_hoi:
-                ws_cap.delete_rows(i)
-                found = True
-                st.success(f"Đã thu hồi mã: {ma_thu_hoi}")
-                break
+                remain_hours = get_remaining_hours(r["ThoiDiemCap"])
 
-        if not found:
-            st.error("Không tìm thấy mã cần thu hồi")
+                col1.write(r["MaTruyCap"])
+                col2.write(r["BienSo"])
+                col3.write(r["ThoiDiemCap"])
+                col4.write(
+                    "Hết hạn" if remain_hours <= 0 else f"Còn {remain_hours} giờ"
+                )
 
-    rows = []
-    for _, r in df_cap.iterrows():
-        remain_hours = get_remaining_hours(r["ThoiDiemCap"])
-        if remain_hours > 0:
-            rows.append({
-                "Mã truy cập": r["MaTruyCap"],
-                "Biển số": r["BienSo"],
-                "Cấp lúc": r["ThoiDiemCap"],
-                "Còn hiệu lực (giờ)": remain_hours
-            })
+                # 🔥 NÚT THU HỒI THEO DÒNG
+                if col5.button("❌ Thu hồi", key=f"revoke_{r['MaTruyCap']}"):
+                    data_all = ws_cap.get_all_values()
 
-    if rows:
-        df_view = pd.DataFrame(rows).sort_values("Còn hiệu lực (giờ)")
-        st.dataframe(df_view, use_container_width=True)
-    else:
-        st.info("Hiện không có mã truy cập nào đang còn hiệu lực.")
+                    for i, row in enumerate(data_all[1:], start=2):
+                        if row[0] == r["MaTruyCap"]:
+                            ws_cap.delete_rows(i)
+                            st.warning(f"Đã thu hồi mã {r['MaTruyCap']}. Người dùng sẽ mất quyền khi reload.")
+                            st.cache_data.clear()
+                            st.experimental_rerun()
+        st.divider()
+        st.markdown("### ➕ Tạo mã truy cập mới (24h)")
 
+        bien_so_cap = st.selectbox(
+            "Chọn biển số cần cấp quyền:",
+            df_xe["Biển số"].dropna().unique().tolist()
+        )
 
-    bien_so_cap = st.selectbox(
-        "Chọn biển số cần cấp quyền:",
-        df_xe["Biển số"].dropna().unique().tolist()
-    )
+        if st.button("Tạo mã truy cập"):
+            new_code, cap_time = create_access_code(sheet, bien_so_cap)
+            st.success(f"""
+            ✅ Đã tạo mã thành công  
+            **Mã:** `{new_code}`  
+            **Biển số:** {bien_so_cap}  
+            **Cấp lúc:** {cap_time}  
+            **Hiệu lực:** 24 giờ
+            """)
+            st.cache_data.clear()
+            st.experimental_rerun()
+    with tab_user:
+        # 🔒 Lọc dữ liệu theo quyền truy cập
+        df_xe = df_xe[df_xe["Biển số"].isin(bien_so_duoc_xem)]
+        df_ls = df_ls[df_ls["Biển số"].isin(bien_so_duoc_xem)]
+        df_next = df_next[df_next["Biển số"].isin(bien_so_duoc_xem)]
 
-    if st.button("Tạo mã truy cập (hiệu lực 24h)"):
-        new_code, cap_time = create_access_code(sheet, bien_so_cap)
+        bien_so_list_sorted = sorted(bien_so_duoc_xem)
 
-        st.success(f"""
-        Đã tạo mã truy cập thành công  
-        **Mã:** `{new_code}`  
-        **Biển số:** {bien_so_cap}  
-        **Thời điểm cấp:** {cap_time}  
-        **Hết hạn sau:** 24 giờ
-        """)
-        st.experimental_rerun()
+        # Khởi tạo session_state nếu chưa có
+        if "selected_bien_so" not in st.session_state:
+            st.session_state.selected_bien_so = bien_so_list_sorted[0]
 
-# 🔒 Lọc dữ liệu theo quyền truy cập
-df_xe = df_xe[df_xe["Biển số"].isin(bien_so_duoc_xem)]
-df_ls = df_ls[df_ls["Biển số"].isin(bien_so_duoc_xem)]
-df_next = df_next[df_next["Biển số"].isin(bien_so_duoc_xem)]
+        selected_bien_so = st.selectbox(
+            "Chọn biển số xe:",
+            bien_so_list_sorted,
+            index=bien_so_list_sorted.index(st.session_state.selected_bien_so)
+        )
 
-bien_so_list_sorted = sorted(bien_so_duoc_xem)
-
+        st.session_state.selected_bien_so = selected_bien_so
 # Khởi tạo session_state nếu chưa có
 if "selected_bien_so" not in st.session_state:
     st.session_state.selected_bien_so = bien_so_list_sorted[0]  # mặc định là xe đầu tiên
