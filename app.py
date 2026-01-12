@@ -38,15 +38,18 @@ def get_gsheet():
 
 sheet = get_gsheet()
 @st.cache_data(ttl=300)
-def load_sheet_data(sheet):
+def load_sheet_data():
+    sheet = get_gsheet()
     return {
         "xe": pd.DataFrame(sheet.worksheet("Xe").get_all_records()),
         "ls": pd.DataFrame(sheet.worksheet("Lịch sử bảo dưỡng").get_all_records()),
         "next": pd.DataFrame(sheet.worksheet("Lịch bảo dưỡng tiếp theo").get_all_records()),
         "cap": pd.DataFrame(sheet.worksheet("CapPhep").get_all_records()),
     }
+
 @st.cache_data(ttl=300)
-def load_cap_phep(sheet):
+def load_cap_phep():
+    sheet = get_gsheet()
     return pd.DataFrame(sheet.worksheet("CapPhep").get_all_records())
 
 def create_access_code(sheet, bien_so):
@@ -80,8 +83,7 @@ if st.session_state.access_info is None:
             st.experimental_rerun()
 
         # 🔐 Mã thường → load riêng CapPhep
-        df_cap_tmp = load_cap_phep(sheet)
-
+        df_cap_tmp = load_cap_phep()
         row = df_cap_tmp[df_cap_tmp["MaTruyCap"] == code]
 
         if row.empty:
