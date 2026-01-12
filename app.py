@@ -73,10 +73,10 @@ if st.session_state.access_info is None:
     code = st.text_input("Mã truy cập", type="password")
     if st.button("Xác nhận"):
 
-        # 🔑 ADMIN vào thẳng (KHÔNG dùng df_cap)
-        if code == "ADMIN":
+        # 🔑 admin vào thẳng (KHÔNG dùng df_cap)
+        if code == "admin":
             st.session_state.access_info = {
-                "code": "ADMIN",
+                "code": "admin",
                 "bien_so": "ALL",
                 "cap_time": datetime.now()
             }
@@ -117,12 +117,12 @@ if st.session_state.access_info["bien_so"] == "ALL":
     bien_so_duoc_xem = df_xe["Biển số"].dropna().unique().tolist()
 else:
     bien_so_duoc_xem = [st.session_state.access_info["bien_so"]]
-# 🛠️ KHU VỰC QUẢN TRỊ – CHỈ ADMIN
-if st.session_state.access_info["code"] == "ADMIN":
+# 🛠️ KHU VỰC QUẢN TRỊ – CHỈ admin
+if st.session_state.access_info["code"] == "admin":
     tab_admin, tab_user = st.tabs(["Quản lý mã đăng nhập", "Tra cứu xe"])
 else:
     tab_user, = st.tabs(["Tra cứu xe"])
-if st.session_state.access_info["code"] == "ADMIN":
+if st.session_state.access_info["code"] == "admin":
     with tab_admin:
         st.markdown("## Quản lý mã đăng nhập")
 
@@ -132,7 +132,7 @@ if st.session_state.access_info["code"] == "ADMIN":
         if df_cap.empty:
             st.info("Chưa có mã truy cập nào.")
         else:
-            st.markdown("### Danh sách mã truy cập (trừ ADMIN – vĩnh viễn)")
+            st.markdown("### Danh sách mã truy cập (trừ admin – vĩnh viễn)")
 
             for idx, r in df_cap.iterrows():
                 col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
