@@ -144,7 +144,7 @@ if st.session_state.access_info["code"] == ADMIN_KEY:
         if df_cap.empty:
             st.info("Chưa có mã truy cập nào.")
         else:
-            st.markdown("### Danh sách mã truy cập (trừ admin – vĩnh viễn)")
+            st.markdown("###")
             # ===== HEADER CỘT =====
             h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 2, 1])
             h1.markdown("**Mã truy cập**")
