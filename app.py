@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import random
 import string
 from google.oauth2.service_account import Credentials
+ADMIN_KEY = "admin"
 def get_remaining_hours(cap_time_str):
     try:
         cap_time = datetime.strptime(cap_time_str, "%Y-%m-%d %H:%M")
@@ -73,12 +74,11 @@ if st.session_state.access_info is None:
     code = st.text_input("Mã truy cập", type="password")
     if st.button("Xác nhận"):
 
-        # 🔑 admin vào thẳng (KHÔNG dùng df_cap)
-        if code == "admin":
+        if code == ADMIN_KEY:
             st.session_state.access_info = {
-                "code": "admin",
+                "code": ADMIN_KEY,
                 "bien_so": "ALL",
-                "cap_time": datetime.now()
+                "cap_time": None
             }
             st.experimental_rerun()
 
@@ -118,7 +118,7 @@ if st.session_state.access_info["bien_so"] == "ALL":
 else:
     bien_so_duoc_xem = [st.session_state.access_info["bien_so"]]
 # 🛠️ KHU VỰC QUẢN TRỊ – CHỈ admin
-if st.session_state.access_info["code"] == "admin":
+if st.session_state.access_info["code"] == ADMIN_KEY:
     tab_admin, tab_user = st.tabs(["Quản lý mã đăng nhập", "Tra cứu xe"])
 else:
     tab_user, = st.tabs(["Tra cứu xe"])
@@ -134,7 +134,7 @@ if st.session_state.access_info["code"] == "admin":
         else:
             st.markdown("### Danh sách mã truy cập (trừ admin – vĩnh viễn)")
 
-            for idx, r in df_cap.iterrows():
+            for idx, r in df_cap[df_cap["MaTruyCap"] != ADMIN_KEY].iterrows():
                 col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
 
                 remain_hours = get_remaining_hours(r["ThoiDiemCap"])
@@ -147,17 +147,19 @@ if st.session_state.access_info["code"] == "admin":
                 )
 
                 # 🔥 NÚT THU HỒI THEO DÒNG
-                if col5.button("❌ Thu hồi", key=f"revoke_{r['MaTruyCap']}"):
-                    data_all = ws_cap.get_all_values()
-
-                    for i, row in enumerate(data_all[1:], start=2):
-                        if row[0] == r["MaTruyCap"]:
-                            ws_cap.delete_rows(i)
-                            st.warning(f"Đã thu hồi mã {r['MaTruyCap']}. Người dùng sẽ mất quyền khi reload.")
-                            st.cache_data.clear()
-                            st.experimental_rerun()
+                if r["MaTruyCap"] != ADMIN_KEY:
+                    if col5.button("❌ Thu hồi", key=f"revoke_{r['MaTruyCap']}"):
+                        data_all = ws_cap.get_all_values()
+                        for i, row in enumerate(data_all[1:], start=2):
+                            if row[0] == r["MaTruyCap"]:
+                                ws_cap.delete_rows(i)
+                                st.warning(
+                                    f"Đã thu hồi mã {r['MaTruyCap']}. Người dùng sẽ mất quyền khi reload."
+                                )
+                                st.cache_data.clear()
+                                st.experimental_rerun()
         st.divider()
-        st.markdown("### ➕ Tạo mã truy cập mới (24h)")
+        st.markdown("### Tạo mã truy cập mới (24h)")
 
         bien_so_cap = st.selectbox(
             "Chọn biển số cần cấp quyền:",
@@ -244,7 +246,7 @@ with tab_user:
         )
 
     st.download_button(
-        "📥 Xuất Excel",
+        "Xuất Excel",
         data=output.getvalue(),
         file_name=f"lich_su_bao_duong_{selected_bien_so}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
