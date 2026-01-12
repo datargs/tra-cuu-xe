@@ -236,14 +236,15 @@ with tab_user:
     df_ls_view["Chi phí"] = pd.to_numeric(df_ls_view["Chi phí"], errors="coerce").fillna(0)
     df_ls_view["Chi phí hiển thị"] = df_ls_view["Chi phí"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
     if is_mobile:
-        st.markdown("#### 📱 Lịch sử bảo dưỡng (mobile)")
+        st.markdown("#### Lịch sử bảo dưỡng")
 
-        # Bảng gọn
+        # 👉 Bảng mobile: Ngày + Nội dung + Chi phí
         st.dataframe(
-            df_ls_view[["Biển số", "Ngày", "Chi phí hiển thị"]],
+            df_ls_view[["Ngày", "Nội dung", "Chi phí hiển thị"]],
             use_container_width=True,
             hide_index=True
         )
+
 
         # Chi tiết từng dòng
         st.markdown("#### 🔍 Chi tiết")
