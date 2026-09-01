@@ -8,6 +8,7 @@ import sqlite3
 import string
 import time
 
+from dotenv import load_dotenv
 from flask import (
     abort,
     Flask,
@@ -24,6 +25,7 @@ from flask import (
 import pandas as pd
 
 
+load_dotenv()
 ADMIN_KEY = os.environ.get("TRACUUXE_ADMIN_KEY", "")
 ACCESS_TTL_HOURS = 24
 INACTIVITY_TIMEOUT_MINUTES = 15
