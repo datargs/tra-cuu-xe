@@ -18,7 +18,7 @@ $trigger = New-ScheduledTaskTrigger `
     -RepetitionDuration (New-TimeSpan -Days 3650)
 $principal = New-ScheduledTaskPrincipal `
     -UserId "$env:USERDOMAIN\$env:USERNAME" `
-    -LogonType InteractiveToken `
+    -LogonType Interactive `
     -RunLevel Highest
 
 Register-ScheduledTask `
