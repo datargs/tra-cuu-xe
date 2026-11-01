@@ -306,12 +306,12 @@ class AreaScopeTest(unittest.TestCase):
             {
                 "action": "set_area_admin_key",
                 "area_code": "bac_ninh",
-                "custom_key": "BACNINH-CUSTOM-01",
+                "custom_key": "BN@2026!A",
             },
         )
         self.assertEqual(response.status_code, 302)
         area_client = app.app.test_client()
-        self.assertEqual(login(area_client, "BACNINH-CUSTOM-01").status_code, 302)
+        self.assertEqual(login(area_client, "BN@2026!A").status_code, 302)
 
     def test_post_without_csrf_is_allowed(self):
         client = app.app.test_client()

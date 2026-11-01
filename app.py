@@ -901,8 +901,8 @@ def set_area_admin_key(area_code, custom_key=""):
     new_key = str(custom_key or "").strip().upper()
     if not new_key:
         new_key = gen_area_admin_key()
-    elif not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{5,63}", new_key):
-        return None, "Mã tự đặt phải dài 6-64 ký tự, chỉ gồm chữ, số, dấu chấm, gạch ngang hoặc gạch dưới."
+    elif not re.fullmatch(r"\S{6,64}", new_key):
+        return None, "Mã tự đặt phải dài 6-64 ký tự và không chứa khoảng trắng. Có thể dùng chữ, số hoặc ký tự đặc biệt."
     stamp = now_vn().strftime("%Y-%m-%d %H:%M")
     init_db()
     with db_connect() as conn:
@@ -10848,7 +10848,7 @@ def admin():
                     <form method="post" class="area-admin-key-form">
                       <input type="hidden" name="action" value="set_area_admin_key">
                       <input type="hidden" name="area_code" value="{{ account.area_code }}">
-                      <input name="custom_key" type="text" minlength="6" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{5,63}" placeholder="Tự đặt mã hoặc để trống" aria-label="Mã tự đặt cho {{ account.label }}">
+                      <input name="custom_key" type="text" minlength="6" maxlength="64" pattern="\S{6,64}" placeholder="Tự đặt mã hoặc để trống" aria-label="Mã tự đặt cho {{ account.label }}">
                       <button class="btn primary" type="submit" onclick="return confirm('Đổi mã đăng nhập tài khoản này? Mã cũ sẽ mất hiệu lực.')">Đặt mã</button>
                       <span class="subtle area-admin-key-help">Bỏ trống để hệ thống tạo mã ngẫu nhiên.</span>
                     </form>
