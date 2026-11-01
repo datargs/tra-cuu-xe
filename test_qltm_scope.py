@@ -290,6 +290,22 @@ class AreaScopeTest(unittest.TestCase):
         self.assertEqual(login(area_client, "CUANAM-TEST-KEY").status_code, 302)
         self.assertEqual(area_client.get("/admin?view=accounts").status_code, 403)
 
+    def test_root_admin_can_set_custom_area_admin_key(self):
+        root_client = app.app.test_client()
+        self.assertEqual(login(root_client, "ROOT-TEST-KEY").status_code, 302)
+        response = post(
+            root_client,
+            "/admin?view=accounts",
+            {
+                "action": "set_area_admin_key",
+                "area_code": "bac_ninh",
+                "custom_key": "BACNINH-CUSTOM-01",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        area_client = app.app.test_client()
+        self.assertEqual(login(area_client, "BACNINH-CUSTOM-01").status_code, 302)
+
     def test_post_without_csrf_is_allowed(self):
         client = app.app.test_client()
         self.assertEqual(client.post("/login", data={"code": "ROOT-TEST-KEY"}).status_code, 302)

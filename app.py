@@ -893,15 +893,29 @@ def area_admin_key_matches(area_code, raw_key):
     return bool(fallback and hmac.compare_digest(fallback, str(raw_key or "").strip()))
 
 
-def rotate_area_admin_key(area_code):
+def set_area_admin_key(area_code, custom_key=""):
     area_code = str(area_code or "").strip()
     spec = AREA_ADMIN_SPECS.get(area_code)
     if not spec:
-        return None
-    new_key = gen_area_admin_key()
+        return None, "Không tìm thấy tài khoản khu vực."
+    new_key = str(custom_key or "").strip().upper()
+    if not new_key:
+        new_key = gen_area_admin_key()
+    elif not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{5,63}", new_key):
+        return None, "Mã tự đặt phải dài 6-64 ký tự, chỉ gồm chữ, số, dấu chấm, gạch ngang hoặc gạch dưới."
     stamp = now_vn().strftime("%Y-%m-%d %H:%M")
     init_db()
     with db_connect() as conn:
+        if ADMIN_KEY and hmac.compare_digest(new_key, ADMIN_KEY.upper()):
+            return None, "Mã này đang được dùng cho admin tổng."
+        account_rows = conn.execute(
+            "SELECT area_code, key_hash FROM area_admin_accounts WHERE area_code <> ?",
+            (area_code,),
+        ).fetchall()
+        if any(verify_admin_key(row["key_hash"], new_key) for row in account_rows):
+            return None, "Mã này đang được dùng cho một tài khoản khu vực khác."
+        if conn.execute("SELECT 1 FROM access_codes WHERE code = ?", (new_key,)).fetchone():
+            return None, "Mã này đang được dùng cho một mã truy cập xe."
         conn.execute(
             """
             UPDATE area_admin_accounts
@@ -911,6 +925,11 @@ def rotate_area_admin_key(area_code):
             (hash_admin_key(new_key), key_hint(new_key), stamp, area_code),
         )
     audit_log("rotate_area_admin", f"Đổi mã quản trị khu vực {spec['label']}")
+    return new_key, ""
+
+
+def rotate_area_admin_key(area_code):
+    new_key, _error = set_area_admin_key(area_code)
     return new_key
 
 
@@ -10337,18 +10356,19 @@ def admin():
 
     if request.method == "POST":
         action = request.form.get("action")
-        if action == "rotate_area_admin":
+        if action in ("rotate_area_admin", "set_area_admin_key"):
             if not is_admin():
                 return Response("Forbidden", status=403)
             area_code = request.form.get("area_code", "").strip()
-            new_key = rotate_area_admin_key(area_code)
+            custom_key = request.form.get("custom_key", "") if action == "set_area_admin_key" else ""
+            new_key, error = set_area_admin_key(area_code, custom_key)
             if new_key:
                 flash(
                     f"Đã đổi mã quản trị {CENTER_FILTER_LABELS.get(area_code, area_code)}. Mã mới: {new_key}",
                     "success",
                 )
             else:
-                flash("Không tìm thấy tài khoản khu vực.", "error")
+                flash(error or "Không thể đổi mã tài khoản khu vực.", "error")
             return redirect(url_for("admin", view="accounts"))
         if action == "toggle_area_admin":
             if not is_admin():
@@ -10794,6 +10814,12 @@ def admin():
           </section>
 
           {% elif admin_view == 'accounts' %}
+          <style>
+            .area-admin-key-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; }
+            .area-admin-key-form { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+            .area-admin-key-form input { min-width:230px; }
+            .area-admin-key-help { width:100%; }
+          </style>
           <section class="panel admin-management-panel">
             <div class="section-head">
               <div>
@@ -10815,11 +10841,19 @@ def admin():
                     <strong class="access-code-value code">{{ account.key_hint or 'Chưa cấp mã' }}</strong>
                     <span class="subtle">Cập nhật {{ format_datetime_display(account.updated_at) }}</span>
                   </div>
-                  <div class="access-card-actions">
-                    <form method="post">
-                      <input type="hidden" name="action" value="rotate_area_admin">
+                  <div class="access-card-actions area-admin-key-actions">
+                    <form method="post" class="area-admin-key-form">
+                      <input type="hidden" name="action" value="set_area_admin_key">
                       <input type="hidden" name="area_code" value="{{ account.area_code }}">
-                      <button class="btn primary" type="submit" onclick="return confirm('Đổi mã đăng nhập tài khoản này? Mã cũ sẽ mất hiệu lực.')">Đổi mã</button>
+                      <input name="custom_key" type="text" minlength="6" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{5,63}" placeholder="Tự đặt mã hoặc để trống" aria-label="Mã tự đặt cho {{ account.label }}">
+                      <button class="btn primary" type="submit" onclick="return confirm('Đổi mã đăng nhập tài khoản này? Mã cũ sẽ mất hiệu lực.')">Đặt mã</button>
+                      <span class="subtle area-admin-key-help">Bỏ trống để hệ thống tạo mã ngẫu nhiên.</span>
+                    </form>
+                    <form method="post">
+                      <input type="hidden" name="action" value="set_area_admin_key">
+                      <input type="hidden" name="area_code" value="{{ account.area_code }}">
+                      <input type="hidden" name="custom_key" value="">
+                      <button class="btn" type="submit" onclick="return confirm('Tạo mã ngẫu nhiên mới? Mã cũ sẽ mất hiệu lực.')">Tạo ngẫu nhiên</button>
                     </form>
                     <form method="post">
                       <input type="hidden" name="action" value="toggle_area_admin">
