@@ -30,5 +30,6 @@ Register-ScheduledTask `
     -Force | Out-Null
 
 Start-ScheduledTask -TaskName $taskName
+& PowerShell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -Force
 Write-Output "Installed and started scheduled task: $taskName"
 Write-Output "Repository: $repo"

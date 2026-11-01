@@ -1,3 +1,6 @@
+param(
+    [switch]$Force
+)
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -58,7 +61,7 @@ try {
     if (-not $localHead -or -not $remoteHead) {
         throw "Unable to resolve local or remote HEAD."
     }
-    if ($localHead -eq $remoteHead) {
+    if ($localHead -eq $remoteHead -and -not $Force) {
         Write-DeployLog "No update needed at $localHead"
         exit 0
     }
