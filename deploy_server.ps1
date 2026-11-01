@@ -40,8 +40,15 @@ if ($gitCommand) {
     $git = $gitCommand.Source
 } elseif (Test-Path "C:\Program Files\Git\cmd\git.exe") {
     $git = "C:\Program Files\Git\cmd\git.exe"
+} elseif (Test-Path "C:\Program Files\Git\bin\git.exe") {
+    $git = "C:\Program Files\Git\bin\git.exe"
 } else {
-    throw "Git was not found."
+    $portableGit = @(Get-ChildItem -Path "C:\Users\*\AppData\Local\OpenClaw\deps\portable-git\mingw64\bin\git.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($portableGit) {
+        $git = $portableGit[0].FullName
+    } else {
+        throw "Git was not found."
+    }
 }
 
 $mutex = New-Object System.Threading.Mutex($false, "Global\TraCuuXeAutoDeploy")
