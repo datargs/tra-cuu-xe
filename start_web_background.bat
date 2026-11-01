@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 
 cd /d "%~dp0"
 set "RUNTIME_DIR=%~dp0runtime"
@@ -24,12 +24,13 @@ powershell.exe -NoProfile -Command "Start-Sleep -Seconds 5"
 
 tasklist /FI "IMAGENAME eq cloudflared.exe" | find /I "cloudflared.exe" >nul
 if errorlevel 1 (
+    set "TUNNEL_CONFIG=C:\Users\windows\.cloudflared\config.yml"
     if exist "C:\Program Files\cloudflared\cloudflared.exe" (
         echo Starting cloudflared tunnel...
-        start "TraCuuXe Tunnel" /min "C:\Program Files\cloudflared\cloudflared.exe" tunnel run autocare-local
+        if exist "!TUNNEL_CONFIG!" (start "TraCuuXe Tunnel" /min "C:\Program Files\cloudflared\cloudflared.exe" tunnel --config "!TUNNEL_CONFIG!" run autocare-local) else (start "TraCuuXe Tunnel" /min "C:\Program Files\cloudflared\cloudflared.exe" tunnel run autocare-local)
     ) else if exist "C:\cloudflared\cloudflared.exe" (
         echo Starting cloudflared tunnel...
-        start "TraCuuXe Tunnel" /min "C:\cloudflared\cloudflared.exe" tunnel run autocare-local
+        if exist "!TUNNEL_CONFIG!" (start "TraCuuXe Tunnel" /min "C:\cloudflared\cloudflared.exe" tunnel --config "!TUNNEL_CONFIG!" run autocare-local) else (start "TraCuuXe Tunnel" /min "C:\cloudflared\cloudflared.exe" tunnel run autocare-local)
     ) else (
         echo cloudflared.exe not found. Web is running locally only.
     )

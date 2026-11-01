@@ -8,28 +8,16 @@ if (-not (Test-Path $scriptPath)) {
     throw "Deployment script was not found at $scriptPath"
 }
 
-$action = New-ScheduledTaskAction `
-    -Execute "PowerShell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-$trigger = New-ScheduledTaskTrigger `
-    -Once `
-    -At (Get-Date).AddMinutes(1) `
-    -RepetitionInterval (New-TimeSpan -Minutes 2) `
-    -RepetitionDuration (New-TimeSpan -Days 3650)
-$principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERDOMAIN\$env:USERNAME" `
-    -LogonType Interactive `
-    -RunLevel Highest
+$taskRun = "PowerShell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+& schtasks.exe /Create /F /TN $taskName /SC MINUTE /MO 2 /RU SYSTEM /RL HIGHEST /TR $taskRun | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to register scheduled task $taskName"
+}
 
-Register-ScheduledTask `
-    -TaskName $taskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Principal $principal `
-    -Description "Pull TraCuuXe main and restart web when a new commit is available" `
-    -Force | Out-Null
-
-Start-ScheduledTask -TaskName $taskName
+& schtasks.exe /Run /TN $taskName | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to start scheduled task $taskName"
+}
 & PowerShell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -Force
 Write-Output "Installed and started scheduled task: $taskName"
 Write-Output "Repository: $repo"
