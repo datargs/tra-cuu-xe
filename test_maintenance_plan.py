@@ -18,10 +18,7 @@ import app
 
 
 def login(client, code):
-    client.get("/login")
-    with client.session_transaction() as flask_session:
-        token = flask_session[app.CSRF_SESSION_KEY]
-    return client.post("/login", data={"code": code, "_csrf_token": token})
+    return client.post("/login", data={"code": code})
 
 
 class MaintenancePlanTest(unittest.TestCase):

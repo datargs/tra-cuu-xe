@@ -17,18 +17,11 @@ import app
 
 
 def login(client, code):
-    client.get("/login")
-    with client.session_transaction() as flask_session:
-        token = flask_session[app.CSRF_SESSION_KEY]
-    return client.post("/login", data={"code": code, "_csrf_token": token})
+    return client.post("/login", data={"code": code})
 
 
 def post(client, path, data=None, **kwargs):
-    with client.session_transaction() as flask_session:
-        token = flask_session[app.CSRF_SESSION_KEY]
-    payload = dict(data or {})
-    payload.setdefault("_csrf_token", token)
-    return client.post(path, data=payload, **kwargs)
+    return client.post(path, data=dict(data or {}), **kwargs)
 
 
 class AreaScopeTest(unittest.TestCase):
@@ -297,9 +290,9 @@ class AreaScopeTest(unittest.TestCase):
         self.assertEqual(login(area_client, "CUANAM-TEST-KEY").status_code, 302)
         self.assertEqual(area_client.get("/admin?view=accounts").status_code, 403)
 
-    def test_post_without_csrf_is_rejected(self):
+    def test_post_without_csrf_is_allowed(self):
         client = app.app.test_client()
-        self.assertEqual(client.post("/login", data={"code": "ROOT-TEST-KEY"}).status_code, 400)
+        self.assertEqual(client.post("/login", data={"code": "ROOT-TEST-KEY"}).status_code, 302)
 
 
 if __name__ == "__main__":

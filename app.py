@@ -28,7 +28,6 @@ from flask import (
     session,
     url_for,
 )
-from markupsafe import Markup, escape
 import pandas as pd
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -47,7 +46,6 @@ MAX_IMPORT_COLUMNS = 32
 LOGIN_MAX_FAILURES = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 300
 LOGIN_LOCKOUT_SECONDS = 300
-CSRF_SESSION_KEY = "_csrf_token"
 
 MAIN_CENTER_CODE = "main"
 AREA_ADMIN_SPECS = {
@@ -219,35 +217,6 @@ def block_common_scanners():
         or path.endswith(BAD_SCAN_SUFFIXES)
     ):
         abort(403)
-
-
-def csrf_token_value():
-    token = session.get(CSRF_SESSION_KEY)
-    if not token:
-        token = secrets.token_urlsafe(32)
-        session[CSRF_SESSION_KEY] = token
-    return token
-
-
-def csrf_input():
-    token = escape(csrf_token_value())
-    return Markup(f'<input type="hidden" name="_csrf_token" value="{token}">')
-
-
-@app.context_processor
-def security_template_context():
-    return {"csrf_token_value": csrf_token_value, "csrf_input": csrf_input}
-
-
-@app.before_request
-def validate_csrf():
-    if request.method != "POST":
-        return None
-    expected = session.get(CSRF_SESSION_KEY)
-    supplied = request.form.get("_csrf_token", "") or request.headers.get("X-CSRF-Token", "")
-    if not expected or not supplied or not hmac.compare_digest(str(expected), str(supplied)):
-        abort(400, description="CSRF token không hợp lệ hoặc đã hết phiên.")
-    return None
 
 
 @app.errorhandler(RequestEntityTooLarge)
@@ -3031,7 +3000,6 @@ BASE_TEMPLATE = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="csrf-token" content="{{ csrf_token_value() }}">
   <title>{{ title or 'Quản lý xe Vietinbank' }}</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-32.png') }}" sizes="32x32">
@@ -6660,20 +6628,6 @@ BASE_TEMPLATE = r"""
       {{ content|safe }}
     </main>
   </div>
-  <script>
-    (function () {
-      var token = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content");
-      if (!token) return;
-      document.querySelectorAll('form[method="post"], form:not([method])').forEach(function (form) {
-        if (form.querySelector('input[name="_csrf_token"]')) return;
-        var input = document.createElement("input");
-        input.type = "hidden";
-        input.name = "_csrf_token";
-        input.value = token;
-        form.appendChild(input);
-      });
-    })();
-  </script>
   <script>
     (function () {
       var toggle = document.querySelector(".menu-toggle");
