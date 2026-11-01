@@ -1032,27 +1032,26 @@ def current_access():
 
 def is_admin():
     info = current_access()
-    return bool(ADMIN_KEY and info and info.get("code") == ADMIN_KEY)
+    return bool(ADMIN_KEY and info and hmac.compare_digest(str(info.get("code", "")), ADMIN_KEY))
 
 
 def admin_actor_codes():
     codes = []
     if ADMIN_KEY:
-        codes.extend(["root_admin", ADMIN_KEY])
+        codes.append("root_admin")
     codes.extend(f"area_admin:{area_code}" for area_code in AREA_ADMIN_SPECS)
-    codes.extend(key for key in AREA_ADMIN_KEYS.values() if key)
     return list(dict.fromkeys(codes))
 
 
 def admin_actor_label(code):
     code = str(code or "").strip()
-    if code == "root_admin" or (ADMIN_KEY and code == ADMIN_KEY):
+    if code == "root_admin" or (ADMIN_KEY and hmac.compare_digest(code, ADMIN_KEY)):
         return "Quản trị cao nhất"
     if code.startswith("area_admin:"):
         area_code = code.split(":", 1)[1]
         return f"Quản trị khu vực: {CENTER_FILTER_LABELS.get(area_code, area_code)}"
     for area_code, area_key in AREA_ADMIN_KEYS.items():
-        if area_key and code == area_key:
+        if area_key and hmac.compare_digest(code, area_key):
             return f"Quản trị khu vực: {CENTER_FILTER_LABELS.get(area_code, area_code)}"
     return "Quản trị hệ thống"
 
@@ -1091,7 +1090,7 @@ def login_required(view):
         if not info:
             return redirect(url_for("login"))
 
-        if (ADMIN_KEY and info.get("code") == ADMIN_KEY) or is_area_admin():
+        if (ADMIN_KEY and hmac.compare_digest(str(info.get("code", "")), ADMIN_KEY)) or is_area_admin():
             return view(*args, **kwargs)
 
         try:
@@ -6772,7 +6771,7 @@ def login():
             flash(f"Quá nhiều lần đăng nhập sai. Vui lòng thử lại sau {retry_after} giây.", "error")
             return redirect(url_for("login"))
         code = request.form.get("code", "").strip()
-        if ADMIN_KEY and code == ADMIN_KEY:
+        if ADMIN_KEY and hmac.compare_digest(code, ADMIN_KEY):
             session["access_info"] = {"code": ADMIN_KEY, "bien_so": "ALL", "cap_time": None}
             touch_last_activity()
             clear_login_failures()
@@ -10444,7 +10443,7 @@ def admin():
     if not data["access"].empty:
         for _, row in data["access"].iterrows():
             code = str(row.get("MaTruyCap", ""))
-            if ADMIN_KEY and code == ADMIN_KEY:
+            if ADMIN_KEY and hmac.compare_digest(code, ADMIN_KEY):
                 continue
             code_plates = parse_plate_list(row.get("BienSo", ""))
             if center_filter != CENTER_FILTER_ALL and (
