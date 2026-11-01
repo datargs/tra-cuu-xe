@@ -9782,19 +9782,17 @@ def admin_data():
               <a class="{{ 'active' if tab == 'vehicles' else '' }}" href="{{ url_for('admin_data', tab='vehicles') }}">
                 Quản lý xe
               </a>
-              {% if root_admin %}
-                <a href="{{ url_for('admin', view='accounts') }}">
-                  Tài khoản khu vực
-                </a>
-              {% endif %}
               {% if root_admin or center_admin %}
                 <a href="{{ url_for('admin', view='access') }}">
                   Quản lý mã truy cập
                 </a>
               {% endif %}
               {% if root_admin %}
+                <a href="{{ url_for('admin', view='accounts') }}">
+                  Tài khoản khu vực
+                </a>
                 <a href="{{ url_for('admin', view='audit') }}">
-                  Lịch sử truy cập
+                  Lịch sử thao tác
                 </a>
               {% endif %}
             </nav>

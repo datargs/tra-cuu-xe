@@ -87,6 +87,10 @@ class AreaScopeTest(unittest.TestCase):
         self.assertEqual(root_form.status_code, 200)
         self.assertIn(b'id="parking-location"', root_form.data)
         self.assertIn("Tài khoản khu vực".encode("utf-8"), root_form.data)
+        root_body = root_form.get_data(as_text=True)
+        self.assertLess(root_body.index("Quản lý xe"), root_body.index("Quản lý mã truy cập"))
+        self.assertLess(root_body.index("Quản lý mã truy cập"), root_body.index("Tài khoản khu vực"))
+        self.assertLess(root_body.index("Tài khoản khu vực"), root_body.index("Lịch sử thao tác"))
 
     def test_center_admin_can_create_code_only_for_center_vehicles(self):
         response = post(
