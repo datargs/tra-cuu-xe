@@ -9518,17 +9518,16 @@ def admin_data():
                 <label for="car-type">Loại xe</label>
                 <input id="car-type" name="car_type" value="{{ car.get("Loại xe", "") }}" placeholder="VD: Toyota Camry">
               </div>
-              <div class="field">
-                <label for="parking-location">Địa điểm xe đỗ</label>
-                <select id="parking-location" name="parking_location">
-                  {% for location in parking_location_options %}
-                    <option value="{{ location }}" {{ 'selected' if parking_location == location else '' }}>{{ location }}</option>
-                  {% endfor %}
-                </select>
-                {% if area_admin %}
-                  <div class="subtle">Địa điểm được tự động cố định theo khu vực quản trị.</div>
-                {% endif %}
-              </div>
+              {% if not area_admin %}
+                <div class="field">
+                  <label for="parking-location">Địa điểm xe đỗ</label>
+                  <select id="parking-location" name="parking_location">
+                    {% for location in parking_location_options %}
+                      <option value="{{ location }}" {{ 'selected' if parking_location == location else '' }}>{{ location }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              {% endif %}
               <div class="form-row">
                 <div class="field">
                   <label for="manufacture-year">Năm sản xuất</label>

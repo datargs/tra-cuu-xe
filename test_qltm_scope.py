@@ -63,6 +63,16 @@ class AreaScopeTest(unittest.TestCase):
         self.assertIn(b"30A-111.11", response.data)
         self.assertNotIn(b"30B-222.22", response.data)
 
+        area_form = self.client.get("/admin/data?tab=vehicles&mode=add")
+        self.assertEqual(area_form.status_code, 200)
+        self.assertNotIn(b'id="parking-location"', area_form.data)
+
+        root_client = app.app.test_client()
+        self.assertEqual(root_client.post("/login", data={"code": "ROOT-TEST-KEY"}).status_code, 302)
+        root_form = root_client.get("/admin/data?tab=vehicles&mode=add")
+        self.assertEqual(root_form.status_code, 200)
+        self.assertIn(b'id="parking-location"', root_form.data)
+
     def test_center_admin_can_create_code_only_for_center_vehicles(self):
         response = self.client.post(
             "/admin",
