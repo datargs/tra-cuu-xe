@@ -21,8 +21,11 @@ function Write-DeployLog {
 
 function Invoke-Git {
     param([Parameter(Mandatory)][string[]]$Arguments)
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $output = & $script:git @Arguments 2>&1
     $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorAction
     foreach ($line in $output) {
         Write-DeployLog ("git: " + [string]$line)
     }
