@@ -7,6 +7,7 @@ import re
 import sqlite3
 import string
 import time
+import unicodedata
 
 from dotenv import load_dotenv
 from flask import (
@@ -32,14 +33,57 @@ INACTIVITY_TIMEOUT_MINUTES = 15
 CACHE_TTL_SECONDS = 900
 DATA_DB_PATH = os.environ.get("TRACUUXE_DB_PATH", os.path.join(os.path.dirname(__file__), "tracuuxe.sqlite3"))
 
+MAIN_CENTER_CODE = "main"
+AREA_ADMIN_SPECS = {
+    "cua_nam": {
+        "label": "Cửa Nam",
+        "env": "TRACUUXE_CUANAM_ADMIN_KEY",
+    },
+    "bac_ha_noi": {
+        "label": "Bắc Hà Nội",
+        "env": "TRACUUXE_BHN_ADMIN_KEY",
+    },
+    "tay_ha_noi": {
+        "label": "Tây Hà Nội",
+        "env": "TRACUUXE_THN_ADMIN_KEY",
+    },
+    "vinh_phuc": {
+        "label": "Vĩnh Phúc",
+        "env": "TRACUUXE_VINHPHUC_ADMIN_KEY",
+    },
+    "hai_phong": {
+        "label": "Hải Phòng",
+        "env": "TRACUUXE_HAIPHONG_ADMIN_KEY",
+    },
+    "bac_ninh": {
+        "label": "Bắc Ninh",
+        "env": "TRACUUXE_BACNINH_ADMIN_KEY",
+    },
+}
+AREA_ADMIN_KEYS = {
+    area_code: os.environ.get(spec["env"], "").strip()
+    for area_code, spec in AREA_ADMIN_SPECS.items()
+}
+CENTER_FILTER_ALL = "all"
+CENTER_FILTER_LABELS = {
+    CENTER_FILTER_ALL: "Tất cả",
+    MAIN_CENTER_CODE: "Hội sở",
+    **{area_code: spec["label"] for area_code, spec in AREA_ADMIN_SPECS.items()},
+}
+
 SHEET_XE = "Xe"
 SHEET_HISTORY = "Lịch sử bảo dưỡng"
 SHEET_NEXT = "Lịch bảo dưỡng tiếp theo"
 SHEET_ACCESS = "CapPhep"
+SHEET_OIL = "Lịch sử thay dầu"
+SHEET_REGISTRATION = "Lịch sử đăng kiểm"
 
 XE_COLUMNS = ["Biển số", "Loại xe", "Năm sản xuất", "Trạng thái"]
+CAR_CENTER_COLUMN = "TrungTam"
+CAR_LOCATION_COLUMN = "DiaDiem"
+XE_DATA_COLUMNS = XE_COLUMNS + [CAR_CENTER_COLUMN, CAR_LOCATION_COLUMN]
 HISTORY_COLUMNS = ["ID", "Biển số", "Ngày", "Nội dung", "Chi phí", "LoaiChiPhi"]
-NEXT_COLUMNS = ["Biển số", "Lịch bảo dưỡng gần nhất", "Dự kiến lần tiếp theo", "Gợi ý nội dung", "Ngày đăng kiểm", "Hạn đăng kiểm đến", "Chi phí thay dầu", "Chi phí đăng kiểm"]
+NEXT_COLUMNS = ["Biển số", "Lịch bảo dưỡng gần nhất", "Dự kiến lần tiếp theo", "Gợi ý nội dung", "LoaiKeHoach", "Ngày đăng kiểm", "Hạn đăng kiểm đến", "Chi phí thay dầu", "Chi phí đăng kiểm"]
 ACCESS_COLUMNS = ["MaTruyCap", "BienSo", "ThoiDiemCap", "ThoiHanGio"]
 VEHICLE_STATUS_ACTIVE = "Đang hoạt động"
 VEHICLE_STATUS_INACTIVE = "Ngừng hoạt động"
@@ -49,6 +93,17 @@ COST_TYPE_LABELS = {
     COST_TYPE_REPAIR: "Sửa chữa",
     COST_TYPE_PERIODIC: "Bảo dưỡng định kỳ",
 }
+MAINTENANCE_FOCUS_LABELS = {
+    "periodic": "Bảo dưỡng định kỳ",
+    "repair": "Sửa chữa",
+    "registration": "Đăng kiểm",
+    "oil": "Thay dầu",
+}
+PLAN_TYPE_REPAIR = COST_TYPE_REPAIR
+PLAN_TYPE_PERIODIC = COST_TYPE_PERIODIC
+PLAN_TYPE_LABELS = COST_TYPE_LABELS.copy()
+PLAN_STATUS_PENDING = "pending"
+PLAN_STATUS_COMPLETED = "completed"
 AUDIT_ACTION_LABELS = {
     "login": "Đăng nhập",
     "logout": "Đăng xuất",
@@ -62,6 +117,15 @@ AUDIT_ACTION_LABELS = {
     "update_next_log": "Sửa dòng lịch kế hoạch",
     "delete_next_log": "Xóa dòng lịch kế hoạch",
     "delete_next_service": "Xóa lịch bảo dưỡng/đăng kiểm",
+    "save_maintenance_plan": "Lập/cập nhật kế hoạch dự kiến",
+    "complete_maintenance_plan": "Cập nhật thực hiện kế hoạch",
+    "save_registration": "Cập nhật đăng kiểm",
+    "save_oil_record": "Lưu bản ghi thay dầu",
+    "delete_oil_record": "Xóa bản ghi thay dầu",
+    "save_registration_record": "Lưu bản ghi đăng kiểm",
+    "delete_registration_record": "Xóa bản ghi đăng kiểm",
+    "import_repair_records": "Nhập Excel sửa chữa",
+    "import_oil_records": "Nhập Excel thay dầu",
     "add_history_record": "Thêm lịch sử bảo dưỡng",
     "update_history_record": "Sửa lịch sử bảo dưỡng",
     "delete_history_record": "Xóa lịch sử bảo dưỡng",
@@ -205,6 +269,8 @@ def init_db():
                 car_type TEXT,
                 manufacture_year TEXT,
                 status TEXT,
+                center TEXT NOT NULL DEFAULT 'main',
+                parking_location TEXT,
                 updated_at TEXT
             );
             CREATE TABLE IF NOT EXISTS next_services (
@@ -212,6 +278,7 @@ def init_db():
                 last_service TEXT,
                 next_due TEXT,
                 suggestion TEXT,
+                plan_type TEXT DEFAULT 'periodic',
                 registry_due TEXT,
                 registry_odo TEXT,
                 registry_date TEXT,
@@ -225,6 +292,7 @@ def init_db():
                 last_service TEXT,
                 next_due TEXT,
                 suggestion TEXT,
+                plan_type TEXT DEFAULT 'periodic',
                 registry_date TEXT,
                 registry_due TEXT,
                 oil_cost REAL,
@@ -239,6 +307,23 @@ def init_db():
                 cost REAL DEFAULT 0,
                 cost_type TEXT DEFAULT 'repair',
                 created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS oil_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plate TEXT NOT NULL,
+                oil_date TEXT NOT NULL,
+                odometer INTEGER NOT NULL DEFAULT 0,
+                previous_odometer INTEGER,
+                cost REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS registration_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plate TEXT NOT NULL,
+                registration_date TEXT NOT NULL,
+                due_month TEXT NOT NULL,
+                cost REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS access_codes (
                 code TEXT PRIMARY KEY,
@@ -261,6 +346,18 @@ def init_db():
             );
             """
         )
+        car_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(cars)").fetchall()
+        }
+        if "center" not in car_columns:
+            conn.execute("ALTER TABLE cars ADD COLUMN center TEXT DEFAULT 'main'")
+        if "parking_location" not in car_columns:
+            conn.execute("ALTER TABLE cars ADD COLUMN parking_location TEXT")
+        conn.execute(
+            "UPDATE cars SET center = ? WHERE center IS NULL OR TRIM(center) = ''",
+            (MAIN_CENTER_CODE,),
+        )
         history_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(service_history)").fetchall()
@@ -277,6 +374,15 @@ def init_db():
             conn.execute("ALTER TABLE next_services ADD COLUMN registry_date TEXT")
         if "last_service" not in next_columns:
             conn.execute("ALTER TABLE next_services ADD COLUMN last_service TEXT")
+        if "plan_type" not in next_columns:
+            conn.execute("ALTER TABLE next_services ADD COLUMN plan_type TEXT DEFAULT 'periodic'")
+        log_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(next_service_logs)").fetchall()
+        }
+        if "plan_type" not in log_columns:
+            conn.execute("ALTER TABLE next_service_logs ADD COLUMN plan_type TEXT DEFAULT 'periodic'")
+        migrate_legacy_auxiliary_history(conn)
         audit_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(audit_logs)").fetchall()
@@ -314,6 +420,19 @@ def normalize_history_cost_type(value):
     return COST_TYPE_REPAIR
 
 
+def normalize_plan_type(value):
+    return normalize_history_cost_type(value)
+
+
+def normalize_maintenance_focus(value):
+    value = str(value or "").strip().lower()
+    return value if value in MAINTENANCE_FOCUS_LABELS else ""
+
+
+def plan_type_label(value):
+    return PLAN_TYPE_LABELS.get(normalize_plan_type(value), PLAN_TYPE_LABELS[PLAN_TYPE_PERIODIC])
+
+
 def history_cost_label(value):
     return COST_TYPE_LABELS.get(normalize_history_cost_type(value), COST_TYPE_LABELS[COST_TYPE_REPAIR])
 
@@ -344,6 +463,75 @@ def parse_money_value(value):
         return 0
 
 
+def migrate_legacy_auxiliary_history(conn):
+    """Move the old single-row oil/registration fields into their histories once."""
+    marker = conn.execute(
+        "SELECT value FROM app_meta WHERE key = 'auxiliary_history_migrated'"
+    ).fetchone()
+    if marker:
+        return
+
+    rows = conn.execute(
+        """
+        SELECT plate, registry_date, registry_due, registry_odo,
+               oil_cost, registry_cost
+        FROM next_services
+        """
+    ).fetchall()
+    stamp = now_vn().strftime("%Y-%m-%d %H:%M")
+    for row in rows:
+        plate = normalize_plate(row["plate"])
+        if not plate:
+            continue
+        registry_date = date_input_value(row["registry_date"])
+        due_value = str(row["registry_due"] or "").strip()
+        due_parsed = parse_user_date(due_value)
+        due_month = due_parsed.strftime("%Y-%m") if due_parsed is not None else ""
+        oil_cost = parse_money_value(row["oil_cost"])
+        registry_cost = parse_money_value(row["registry_cost"])
+        if registry_date and oil_cost > 0:
+            conn.execute(
+                """
+                INSERT INTO oil_records
+                    (plate, oil_date, odometer, previous_odometer, cost, created_at)
+                SELECT ?, ?, 0, NULL, ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM oil_records
+                    WHERE plate = ? AND oil_date = ? AND cost = ?
+                )
+                """,
+                (plate, registry_date, oil_cost, stamp, plate, registry_date, oil_cost),
+            )
+        if registry_date and due_month:
+            conn.execute(
+                """
+                INSERT INTO registration_records
+                    (plate, registration_date, due_month, cost, created_at)
+                SELECT ?, ?, ?, ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM registration_records
+                    WHERE plate = ? AND registration_date = ? AND due_month = ? AND cost = ?
+                )
+                """,
+                (
+                    plate,
+                    registry_date,
+                    due_month,
+                    registry_cost,
+                    stamp,
+                    plate,
+                    registry_date,
+                    due_month,
+                    registry_cost,
+                ),
+            )
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES ('auxiliary_history_migrated', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (stamp,),
+    )
+
+
 def clear_cache(sheet_name=None):
     if sheet_name:
         _cache["sheets"].pop(sheet_name, None)
@@ -365,7 +553,9 @@ def worksheet_df(name, columns=None):
                     plate AS 'Biển số',
                     car_type AS 'Loại xe',
                     manufacture_year AS 'Năm sản xuất',
-                    status AS 'Trạng thái'
+                    status AS 'Trạng thái',
+                    COALESCE(center, 'main') AS 'TrungTam',
+                    COALESCE(parking_location, '') AS 'DiaDiem'
                 FROM cars
                 ORDER BY plate
                 """,
@@ -394,6 +584,7 @@ def worksheet_df(name, columns=None):
                     last_service AS 'Lịch bảo dưỡng gần nhất',
                     next_due AS 'Dự kiến lần tiếp theo',
                     suggestion AS 'Gợi ý nội dung',
+                    COALESCE(plan_type, 'periodic') AS 'LoaiKeHoach',
                     registry_date AS 'Ngày đăng kiểm',
                     registry_due AS 'Hạn đăng kiểm đến',
                     oil_cost AS 'Chi phí thay dầu',
@@ -416,6 +607,35 @@ def worksheet_df(name, columns=None):
                 """,
                 conn,
             )
+        elif name == SHEET_OIL:
+            df = pd.read_sql_query(
+                """
+                SELECT
+                    id AS 'ID',
+                    plate AS 'Biển số',
+                    oil_date AS 'Ngày thay dầu',
+                    odometer AS 'Số km khi thay dầu',
+                    previous_odometer AS 'Số km trước',
+                    cost AS 'Chi phí thay dầu'
+                FROM oil_records
+                ORDER BY oil_date DESC, id DESC
+                """,
+                conn,
+            )
+        elif name == SHEET_REGISTRATION:
+            df = pd.read_sql_query(
+                """
+                SELECT
+                    id AS 'ID',
+                    plate AS 'Biển số',
+                    registration_date AS 'Ngày đăng kiểm',
+                    due_month AS 'Tháng đăng kiểm tiếp theo',
+                    cost AS 'Chi phí đăng kiểm'
+                FROM registration_records
+                ORDER BY registration_date DESC, id DESC
+                """,
+                conn,
+            )
         else:
             df = pd.DataFrame(columns=columns or [])
 
@@ -427,10 +647,12 @@ def worksheet_df(name, columns=None):
 
 def load_data(keys=None):
     sheet_map = {
-        "xe": (SHEET_XE, None),
+        "xe": (SHEET_XE, XE_DATA_COLUMNS),
         "history": (SHEET_HISTORY, None),
         "next": (SHEET_NEXT, None),
         "access": (SHEET_ACCESS, ["MaTruyCap", "BienSo", "ThoiDiemCap", "ThoiHanGio"]),
+        "oil": (SHEET_OIL, None),
+        "registration": (SHEET_REGISTRATION, None),
     }
     selected_keys = keys or sheet_map.keys()
     return {key: worksheet_df(*sheet_map[key]) for key in selected_keys}
@@ -499,6 +721,52 @@ def is_admin():
     return bool(ADMIN_KEY and info and info.get("code") == ADMIN_KEY)
 
 
+def admin_actor_codes():
+    codes = []
+    if ADMIN_KEY:
+        codes.append(ADMIN_KEY)
+    codes.extend(key for key in AREA_ADMIN_KEYS.values() if key)
+    return list(dict.fromkeys(codes))
+
+
+def admin_actor_label(code):
+    code = str(code or "").strip()
+    if ADMIN_KEY and code == ADMIN_KEY:
+        return "Quản trị cao nhất"
+    for area_code, area_key in AREA_ADMIN_KEYS.items():
+        if area_key and code == area_key:
+            return f"Quản trị khu vực: {CENTER_FILTER_LABELS.get(area_code, area_code)}"
+    return "Quản trị hệ thống"
+
+
+def current_area_code():
+    info = current_access()
+    if not info or info.get("role") != "area_admin":
+        return None
+    area_code = str(info.get("area") or info.get("center") or "").strip()
+    area_key = AREA_ADMIN_KEYS.get(area_code, "")
+    if area_code not in AREA_ADMIN_SPECS or not area_key or info.get("code") != area_key:
+        return None
+    return area_code
+
+
+def is_area_admin():
+    return bool(current_area_code())
+
+
+def is_center_admin():
+    """Backward-compatible internal name for an area administrator."""
+    return is_area_admin()
+
+
+def current_area_label():
+    return CENTER_FILTER_LABELS.get(current_area_code() or "", "")
+
+
+def can_manage_data():
+    return is_admin() or is_area_admin()
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -506,7 +774,7 @@ def login_required(view):
         if not info:
             return redirect(url_for("login"))
 
-        if ADMIN_KEY and info.get("code") == ADMIN_KEY:
+        if (ADMIN_KEY and info.get("code") == ADMIN_KEY) or is_area_admin():
             return view(*args, **kwargs)
 
         try:
@@ -672,6 +940,371 @@ def parse_date_series(values):
     return parsed
 
 
+def parse_integer_value(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            if pd.isna(value):
+                return 0
+        except Exception:
+            pass
+        return int(value)
+    digits = re.sub(r"\D", "", str(value or ""))
+    return int(digits) if digits else 0
+
+
+def normalize_month_input(value):
+    parsed = parse_user_date(value)
+    return parsed.strftime("%Y-%m") if parsed is not None else ""
+
+
+def format_month_display(value):
+    month = normalize_month_input(value)
+    if not month:
+        return "Chưa cập nhật"
+    return f"{month[5:7]}/{month[:4]}"
+
+
+def add_one_year(value):
+    try:
+        return value.replace(year=value.year + 1)
+    except ValueError:
+        return value.replace(year=value.year + 1, day=28)
+
+
+def maintenance_schedule(history_df, plate):
+    """Calculate the next periodic maintenance from the latest actual record."""
+    empty = {
+        "latest_date": "",
+        "latest_display": "Chưa cập nhật",
+        "next_date": "",
+        "next_month": "Chưa cập nhật",
+        "next_tooltip": "",
+        "state": due_state(""),
+    }
+    if history_df is None or history_df.empty or "Biển số" not in history_df.columns:
+        return empty
+    view = history_df[history_df["Biển số"].astype(str) == normalize_plate(plate)].copy()
+    if view.empty:
+        return empty
+    if "LoaiChiPhi" in view.columns:
+        view = view[view["LoaiChiPhi"].apply(normalize_history_cost_type) == COST_TYPE_PERIODIC]
+    if view.empty or "Ngày" not in view.columns:
+        return empty
+    view["_date"] = parse_date_series(view["Ngày"])
+    view = view.dropna(subset=["_date"])
+    if view.empty:
+        return empty
+    latest = view["_date"].max().to_pydatetime()
+    next_date = add_one_year(latest)
+    next_iso = next_date.strftime("%Y-%m-%d")
+    state = due_state(next_iso)
+    state["date"] = next_date.strftime("%m/%Y")
+    state["tooltip"] = next_date.strftime("%d/%m/%Y")
+    return {
+        "latest_date": latest.strftime("%Y-%m-%d"),
+        "latest_display": latest.strftime("%d/%m/%Y"),
+        "next_date": next_iso,
+        "next_month": next_date.strftime("%m/%Y"),
+        "next_tooltip": next_date.strftime("%d/%m/%Y"),
+        "state": state,
+    }
+
+
+def build_oil_rows(df, plate):
+    if df is None or df.empty:
+        return []
+    view = df[df["Biển số"].astype(str) == normalize_plate(plate)].copy()
+    rows = []
+    for _, row in view.iterrows():
+        current_km = parse_integer_value(row.get("Số km khi thay dầu"))
+        previous_km = parse_integer_value(row.get("Số km trước"))
+        rows.append(
+            {
+                "id": str(row.get("ID", "")),
+                "date": format_short_date(row.get("Ngày thay dầu")),
+                "date_raw": date_input_value(row.get("Ngày thay dầu")),
+                "odometer": f"{current_km:,}".replace(",", ".") if current_km else "-",
+                "odometer_raw": str(current_km or ""),
+                "previous_odometer": f"{previous_km:,}".replace(",", ".") if previous_km else "-",
+                "previous_odometer_raw": str(previous_km or ""),
+                "distance": f"{current_km - previous_km:,}".replace(",", ".") if current_km and previous_km else "-",
+                "cost": format_vnd(row.get("Chi phí thay dầu")),
+                "cost_raw": format_money_input(row.get("Chi phí thay dầu")),
+            }
+        )
+    return rows
+
+
+def build_registration_rows(df, plate):
+    if df is None or df.empty:
+        return []
+    view = df[df["Biển số"].astype(str) == normalize_plate(plate)].copy()
+    rows = []
+    for _, row in view.iterrows():
+        rows.append(
+            {
+                "id": str(row.get("ID", "")),
+                "date": format_short_date(row.get("Ngày đăng kiểm")),
+                "date_raw": date_input_value(row.get("Ngày đăng kiểm")),
+                "due_month": format_month_display(row.get("Tháng đăng kiểm tiếp theo")),
+                "due_month_raw": normalize_month_input(row.get("Tháng đăng kiểm tiếp theo")),
+                "cost": format_vnd(row.get("Chi phí đăng kiểm")),
+                "cost_raw": format_money_input(row.get("Chi phí đăng kiểm")),
+            }
+        )
+    return rows
+
+
+def save_oil_record(plate, oil_date, odometer, previous_odometer, cost, record_id=""):
+    plate = normalize_plate(plate)
+    date_value = date_input_value(oil_date)
+    current_km = parse_integer_value(odometer)
+    if not plate or not date_value or current_km <= 0:
+        return False, "Vui lòng nhập ngày thay dầu và số kilomet hiện tại."
+    init_db()
+    with db_connect() as conn:
+        if record_id:
+            current = conn.execute(
+                "SELECT odometer FROM oil_records WHERE id = ? AND plate = ?",
+                (record_id, plate),
+            ).fetchone()
+        else:
+            current = None
+        previous_km = parse_integer_value(previous_odometer)
+        if previous_km <= 0:
+            query = "SELECT odometer FROM oil_records WHERE plate = ?"
+            args = [plate]
+            if record_id:
+                query += " AND id <> ?"
+                args.append(record_id)
+            query += " ORDER BY oil_date DESC, id DESC LIMIT 1"
+            latest = conn.execute(query, args).fetchone()
+            previous_km = int(latest["odometer"]) if latest and latest["odometer"] else 0
+        if not current and previous_km <= 0:
+            return False, "Lần nhập thay dầu đầu tiên cần nhập số kilomet trước."
+        if previous_km and current_km < previous_km:
+            return False, "Số kilomet khi thay dầu phải lớn hơn số kilomet trước."
+        amount = parse_money_value(cost)
+        stamp = now_vn().strftime("%Y-%m-%d %H:%M")
+        if record_id:
+            result = conn.execute(
+                """
+                UPDATE oil_records
+                SET oil_date = ?, odometer = ?, previous_odometer = ?, cost = ?
+                WHERE id = ? AND plate = ?
+                """,
+                (date_value, current_km, previous_km or None, amount, record_id, plate),
+            )
+        else:
+            result = conn.execute(
+                """
+                INSERT INTO oil_records
+                    (plate, oil_date, odometer, previous_odometer, cost, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (plate, date_value, current_km, previous_km or None, amount, stamp),
+            )
+        if result.rowcount != 1:
+            return False, "Không tìm thấy bản ghi thay dầu cần cập nhật."
+        conn.commit()
+    clear_cache()
+    audit_log("save_oil_record", f"Lưu bản ghi thay dầu cho xe {plate}", plate)
+    return True, "Đã lưu bản ghi thay dầu."
+
+
+def delete_oil_record(record_id, plate):
+    init_db()
+    with db_connect() as conn:
+        result = conn.execute("DELETE FROM oil_records WHERE id = ? AND plate = ?", (record_id, normalize_plate(plate)))
+        conn.commit()
+    if result.rowcount:
+        clear_cache()
+        audit_log("delete_oil_record", f"Xóa bản ghi thay dầu #{record_id}", plate)
+        return True
+    return False
+
+
+def save_registration_record(plate, registration_date, due_month, cost, record_id=""):
+    plate = normalize_plate(plate)
+    date_value = date_input_value(registration_date)
+    month_value = normalize_month_input(due_month)
+    if not plate or not date_value or not month_value:
+        return False, "Vui lòng nhập ngày đăng kiểm và tháng dự kiến đăng kiểm tiếp theo."
+    amount = parse_money_value(cost)
+    init_db()
+    with db_connect() as conn:
+        if record_id:
+            result = conn.execute(
+                """
+                UPDATE registration_records
+                SET registration_date = ?, due_month = ?, cost = ?
+                WHERE id = ? AND plate = ?
+                """,
+                (date_value, month_value, amount, record_id, plate),
+            )
+        else:
+            result = conn.execute(
+                """
+                INSERT INTO registration_records
+                    (plate, registration_date, due_month, cost, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (plate, date_value, month_value, amount, now_vn().strftime("%Y-%m-%d %H:%M")),
+            )
+        if result.rowcount != 1:
+            return False, "Không tìm thấy bản ghi đăng kiểm cần cập nhật."
+        conn.commit()
+    clear_cache()
+    audit_log("save_registration_record", f"Lưu bản ghi đăng kiểm cho xe {plate}", plate)
+    return True, "Đã lưu bản ghi đăng kiểm."
+
+
+def delete_registration_record(record_id, plate):
+    init_db()
+    with db_connect() as conn:
+        result = conn.execute(
+            "DELETE FROM registration_records WHERE id = ? AND plate = ?",
+            (record_id, normalize_plate(plate)),
+        )
+        conn.commit()
+    if result.rowcount:
+        clear_cache()
+        audit_log("delete_registration_record", f"Xóa bản ghi đăng kiểm #{record_id}", plate)
+        return True
+    return False
+
+
+def normalize_import_header(value):
+    text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def import_column(frame, aliases):
+    wanted = {normalize_import_header(alias) for alias in aliases}
+    for column in frame.columns:
+        if normalize_import_header(column) in wanted:
+            return column
+    return None
+
+
+def import_date_value(value):
+    parsed = parse_user_date(value)
+    return parsed.strftime("%Y-%m-%d") if parsed is not None else ""
+
+
+def import_repair_records(upload, scope_plates):
+    if upload is None or not upload.filename:
+        return False, "Vui lòng chọn file Excel sửa chữa."
+    try:
+        frame = pd.read_excel(upload, dtype=object)
+    except Exception as exc:
+        return False, f"Không đọc được file Excel: {exc}"
+    plate_col = import_column(frame, ["Biển số", "Biển số xe", "Plate"])
+    date_col = import_column(frame, ["Ngày sửa chữa", "Ngày", "Repair date"])
+    content_col = import_column(frame, ["Nội dung sửa chữa", "Nội dung", "Repair content"])
+    cost_col = import_column(frame, ["Số tiền", "Chi phí", "Chi phí sửa chữa", "Cost"])
+    if not all((plate_col, date_col, content_col, cost_col)):
+        return False, "File sửa chữa phải có các cột: Biển số, Ngày sửa chữa, Nội dung sửa chữa, Số tiền."
+    rows = []
+    scope = set(scope_plates)
+    for index, item in frame.iterrows():
+        if all(pd.isna(item.get(column)) or not str(item.get(column)).strip() for column in (plate_col, date_col, content_col, cost_col)):
+            continue
+        plate = normalize_plate(item.get(plate_col))
+        date_value = import_date_value(item.get(date_col))
+        content = str(item.get(content_col) or "").strip()
+        if plate not in scope:
+            return False, f"Dòng {index + 2}: biển số {plate or '(trống)'} không thuộc phạm vi quản lý."
+        if not date_value or not content:
+            return False, f"Dòng {index + 2}: cần có ngày sửa chữa và nội dung sửa chữa."
+        rows.append((plate, date_value, content, parse_money_value(item.get(cost_col))))
+    if not rows:
+        return False, "File không có dòng sửa chữa hợp lệ."
+    init_db()
+    with db_connect() as conn:
+        conn.executemany(
+            "INSERT INTO service_history (plate, service_date, content, cost, cost_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [(plate, date_value, content, cost, COST_TYPE_REPAIR, now_vn().strftime("%Y-%m-%d %H:%M")) for plate, date_value, content, cost in rows],
+        )
+        conn.commit()
+    clear_cache(SHEET_HISTORY)
+    import_counts = {}
+    for row in rows:
+        import_counts[row[0]] = import_counts.get(row[0], 0) + 1
+    for plate, count in sorted(import_counts.items()):
+        audit_log("import_repair_records", f"Nhập {count} bản ghi sửa chữa từ Excel", plate)
+    return True, f"Đã nhập {len(rows)} bản ghi sửa chữa."
+
+
+def import_oil_records(upload, scope_plates):
+    if upload is None or not upload.filename:
+        return False, "Vui lòng chọn file Excel thay dầu."
+    try:
+        frame = pd.read_excel(upload, dtype=object)
+    except Exception as exc:
+        return False, f"Không đọc được file Excel: {exc}"
+    plate_col = import_column(frame, ["Biển số", "Biển số xe", "Plate"])
+    date_col = import_column(frame, ["Ngày thay dầu", "Ngày", "Oil date"])
+    current_col = import_column(frame, ["Số km khi thay dầu", "Số kilomet khi thay dầu", "Kilomet hiện tại", "Odometer"])
+    previous_col = import_column(frame, ["Số km trước", "Số kilomet trước", "Odometer trước"])
+    cost_col = import_column(frame, ["Chi phí thay dầu", "Chi phí", "Số tiền", "Cost"])
+    if not all((plate_col, date_col, current_col, cost_col)):
+        return False, "File thay dầu phải có các cột: Biển số, Ngày thay dầu, Số km khi thay dầu, Chi phí thay dầu."
+    scope = set(scope_plates)
+    rows = []
+    previous_by_plate = {}
+    init_db()
+    with db_connect() as conn:
+        for plate in scope:
+            latest = conn.execute("SELECT odometer FROM oil_records WHERE plate = ? ORDER BY oil_date DESC, id DESC LIMIT 1", (plate,)).fetchone()
+            previous_by_plate[plate] = int(latest["odometer"]) if latest and latest["odometer"] else 0
+        for index, item in frame.iterrows():
+            values = (item.get(plate_col), item.get(date_col), item.get(current_col), item.get(cost_col))
+            if all(pd.isna(value) or not str(value).strip() for value in values):
+                continue
+            plate = normalize_plate(item.get(plate_col))
+            date_value = import_date_value(item.get(date_col))
+            current_km = parse_integer_value(item.get(current_col))
+            previous_km = parse_integer_value(item.get(previous_col)) if previous_col else 0
+            if plate not in scope:
+                return False, f"Dòng {index + 2}: biển số {plate or '(trống)'} không thuộc phạm vi quản lý."
+            if not date_value or current_km <= 0:
+                return False, f"Dòng {index + 2}: cần có ngày thay dầu và số kilomet khi thay dầu."
+            if previous_km <= 0:
+                previous_km = previous_by_plate.get(plate, 0)
+            if previous_km <= 0:
+                return False, f"Dòng {index + 2}: lần thay dầu đầu tiên của {plate} phải có Số km trước."
+            if current_km < previous_km:
+                return False, f"Dòng {index + 2}: số km khi thay dầu phải lớn hơn hoặc bằng số km trước."
+            rows.append((plate, date_value, current_km, previous_km, parse_money_value(item.get(cost_col))))
+            previous_by_plate[plate] = current_km
+        if not rows:
+            return False, "File không có dòng thay dầu hợp lệ."
+        conn.executemany(
+            "INSERT INTO oil_records (plate, oil_date, odometer, previous_odometer, cost, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [(plate, date_value, current_km, previous_km, cost, now_vn().strftime("%Y-%m-%d %H:%M")) for plate, date_value, current_km, previous_km, cost in rows],
+        )
+        conn.commit()
+    clear_cache(SHEET_OIL)
+    import_counts = {}
+    for row in rows:
+        import_counts[row[0]] = import_counts.get(row[0], 0) + 1
+    for plate, count in sorted(import_counts.items()):
+        audit_log("import_oil_records", f"Nhập {count} bản ghi thay dầu từ Excel", plate)
+    return True, f"Đã nhập {len(rows)} bản ghi thay dầu."
+
+
+def latest_maintenance_date(history_df, plate, fallback=""):
+    """Return the latest actual maintenance/repair date for a vehicle."""
+    if history_df is not None and not history_df.empty and "Biển số" in history_df.columns:
+        view = history_df[history_df["Biển số"].astype(str) == normalize_plate(plate)].copy()
+        if not view.empty and "Ngày" in view.columns:
+            dates = parse_date_series(view["Ngày"]).dropna()
+            if not dates.empty:
+                return dates.max().strftime("%Y-%m-%d")
+    return date_input_value(fallback)
+
+
 def parse_due_date(value):
     text = str(value or "").strip()
     if not text or text.lower() == "nan":
@@ -699,6 +1332,105 @@ def due_alerts(next_item):
             alerts.append({"level": "danger", "text": f"{label} đã quá hạn: {display_value}"})
         elif days <= 30:
             alerts.append({"level": "warning", "text": f"{label} sắp đến hạn: {display_value}"})
+    return alerts
+
+
+def pending_maintenance_plan_alerts():
+    """Automatic reminders derived from the latest actual histories."""
+    info = current_access()
+    if not info:
+        return []
+    allowed = None
+    center = None
+    if is_area_admin():
+        center = current_area_code()
+    elif is_admin():
+        center = None
+    else:
+        allowed = parse_plate_list(info.get("bien_so"))
+
+    data = load_data(["xe", "history", "registration"])
+    vehicles = data["xe"]
+    if center:
+        vehicles = center_filtered_vehicle_df(vehicles, center)
+    if allowed is not None and allowed != ["ALL"]:
+        vehicles = vehicles[vehicles["Biển số"].astype(str).isin(set(allowed))]
+    plates = safe_unique(active_vehicle_df(vehicles), "Biển số")
+    today = now_vn().date()
+    alerts = []
+    car_map = {}
+    for _, row in vehicles.iterrows():
+        plate = normalize_plate(row.get("Biển số"))
+        car_map[plate] = row.to_dict()
+    for plate in plates:
+        schedule = maintenance_schedule(data["history"], plate)
+        due = parse_due_date(schedule.get("next_date"))
+        if due and due.date() <= today:
+            overdue_days = max(0, (today - due.date()).days)
+            alerts.append({
+                "plate": plate,
+                "car_type": car_map.get(plate, {}).get("Loại xe", ""),
+                "planned_date": due.strftime("%d/%m/%Y"),
+                "planned_date_raw": due.strftime("%Y-%m-%d"),
+                "content": "Bảo dưỡng định kỳ",
+                "plan_type": COST_TYPE_PERIODIC,
+                "plan_type_label": "Bảo dưỡng định kỳ",
+                "center": str(car_map.get(plate, {}).get(CAR_CENTER_COLUMN, MAIN_CENTER_CODE) or MAIN_CENTER_CODE),
+                "center_label": CENTER_FILTER_LABELS.get(str(car_map.get(plate, {}).get(CAR_CENTER_COLUMN, MAIN_CENTER_CODE) or MAIN_CENTER_CODE), "Không xác định"),
+                "overdue_days": overdue_days,
+                "kind": "maintenance",
+            })
+    # Compatibility for old databases: preserve an existing due plan until
+    # the operator records its first actual maintenance entry.
+    legacy = load_data(["next"])["next"]
+    if not legacy.empty:
+        for _, row in legacy[legacy["Biển số"].astype(str).isin(plates)].iterrows():
+            plate = normalize_plate(row.get("Biển số"))
+            if any(item["plate"] == plate and item["kind"] == "maintenance" for item in alerts):
+                continue
+            due = parse_due_date(row.get("Dự kiến lần tiếp theo"))
+            if due is None or due.date() > today:
+                continue
+            overdue_days = max(0, (today - due.date()).days)
+            alerts.append({
+                "plate": plate,
+                "car_type": car_map.get(plate, {}).get("Loại xe", ""),
+                "planned_date": due.strftime("%d/%m/%Y"),
+                "planned_date_raw": due.strftime("%Y-%m-%d"),
+                "content": row.get("Gợi ý nội dung", "") or "Bảo dưỡng định kỳ",
+                "plan_type": normalize_plan_type(row.get("LoaiKeHoach")),
+                "plan_type_label": plan_type_label(row.get("LoaiKeHoach")),
+                "center": str(car_map.get(plate, {}).get(CAR_CENTER_COLUMN, MAIN_CENTER_CODE) or MAIN_CENTER_CODE),
+                "center_label": CENTER_FILTER_LABELS.get(str(car_map.get(plate, {}).get(CAR_CENTER_COLUMN, MAIN_CENTER_CODE) or MAIN_CENTER_CODE), "Không xác định"),
+                "overdue_days": overdue_days,
+                "kind": "maintenance",
+            })
+    registration = data.get("registration", pd.DataFrame())
+    if not registration.empty:
+        registration = registration[registration["Biển số"].astype(str).isin(plates)].copy()
+        registration["_date"] = parse_date_series(registration["Ngày đăng kiểm"])
+        for plate, group in registration.groupby("Biển số"):
+            group = group.sort_values(["_date", "ID"], ascending=False)
+            row = group.iloc[0]
+            due_month = normalize_month_input(row.get("Tháng đăng kiểm tiếp theo"))
+            due = parse_user_date(f"{due_month}-01") if due_month else None
+            if due is None or due.date() > today:
+                continue
+            overdue_days = max(0, (today - due.date()).days)
+            alerts.append({
+                "plate": str(plate),
+                "car_type": car_map.get(str(plate), {}).get("Loại xe", ""),
+                "planned_date": format_month_display(due_month),
+                "planned_date_raw": due.strftime("%Y-%m-%d"),
+                "content": "Đăng kiểm",
+                "plan_type": "registry",
+                "plan_type_label": "Đăng kiểm",
+                "center": str(car_map.get(str(plate), {}).get(CAR_CENTER_COLUMN, MAIN_CENTER_CODE) or MAIN_CENTER_CODE),
+                "center_label": CENTER_FILTER_LABELS.get(str(car_map.get(str(plate), {}).get(CAR_CENTER_COLUMN, MAIN_CENTER_CODE) or MAIN_CENTER_CODE), "Không xác định"),
+                "overdue_days": overdue_days,
+                "kind": "registration",
+            })
+    alerts.sort(key=lambda item: (item["overdue_days"] == 0, -item["overdue_days"], item["plate"]))
     return alerts
 
 
@@ -770,6 +1502,8 @@ def dashboard_rows(data, plates):
     df_xe = data["xe"]
     df_next = data["next"]
     df_history = data["history"]
+    df_oil = data.get("oil", pd.DataFrame())
+    df_registration = data.get("registration", pd.DataFrame())
     labels = plate_label_map(df_xe)
     rows = []
 
@@ -795,12 +1529,32 @@ def dashboard_rows(data, plates):
                 repair_cost = history_view[history_view["_cost_type"] == COST_TYPE_REPAIR]["_cost"].sum()
                 periodic_cost = history_view[history_view["_cost_type"] == COST_TYPE_PERIODIC]["_cost"].sum()
 
-        oil_cost = parse_money_value(next_item.get("Chi phí thay dầu"))
-        registry_cost = parse_money_value(next_item.get("Chi phí đăng kiểm"))
+        oil_view = df_oil[df_oil["Biển số"].astype(str) == plate].copy() if not df_oil.empty else pd.DataFrame()
+        registration_view = (
+            df_registration[df_registration["Biển số"].astype(str) == plate].copy()
+            if not df_registration.empty
+            else pd.DataFrame()
+        )
+        if not oil_view.empty:
+            oil_cost = pd.to_numeric(oil_view["Chi phí thay dầu"], errors="coerce").fillna(0).sum()
+            history_count += len(oil_view)
+        else:
+            oil_cost = parse_money_value(next_item.get("Chi phí thay dầu"))
+        if not registration_view.empty:
+            registry_cost = pd.to_numeric(registration_view["Chi phí đăng kiểm"], errors="coerce").fillna(0).sum()
+            history_count += len(registration_view)
+        else:
+            registry_cost = parse_money_value(next_item.get("Chi phí đăng kiểm"))
         total_cost = repair_cost + periodic_cost + oil_cost + registry_cost
 
-        maintenance = due_state(next_item.get("Dự kiến lần tiếp theo"))
-        registry = due_state(next_item.get("Hạn đăng kiểm đến"))
+        schedule = maintenance_schedule(df_history, plate)
+        maintenance = schedule["state"] if schedule["next_date"] else due_state("")
+        if not registration_view.empty:
+            registration_view["_date"] = parse_date_series(registration_view["Ngày đăng kiểm"])
+            latest_registration = registration_view.sort_values(["_date", "ID"], ascending=False).iloc[0]
+            registry = due_state(f"{normalize_month_input(latest_registration.get('Tháng đăng kiểm tiếp theo'))}-01")
+        else:
+            registry = due_state("")
         urgent_score = min(
             [
                 value
@@ -843,6 +1597,8 @@ def dashboard_rows(data, plates):
 def dashboard_cost_summary(data, plates, period="year", selected_value=None):
     df_history = data["history"]
     df_next = data["next"]
+    df_oil = data.get("oil", pd.DataFrame())
+    df_registration = data.get("registration", pd.DataFrame())
     today = now_vn()
     current_quarter = ((today.month - 1) // 3) + 1
     empty = {
@@ -919,15 +1675,59 @@ def dashboard_cost_summary(data, plates, period="year", selected_value=None):
                     }
                 )
 
+    oil_plates = set(df_oil[plate_col].astype(str)) if not df_oil.empty and plate_col in df_oil.columns else set()
+    registration_plates = set(df_registration[plate_col].astype(str)) if not df_registration.empty and plate_col in df_registration.columns else set()
+    if not df_oil.empty and plate_col in df_oil.columns:
+        oil_view = df_oil[df_oil[plate_col].astype(str).isin(plates)].copy()
+        for _, row in oil_view.iterrows():
+            plate = str(row.get(plate_col, ""))
+            oil_date = parse_user_date(row.get("Ngày thay dầu"))
+            oil_amount = parse_money_value(row.get("Chi phí thay dầu"))
+            if oil_date is None or oil_amount <= 0:
+                continue
+            all_dates.append(oil_date)
+            counts = plate_type_counts.setdefault(plate, {"repair": 0, "periodic": 0, "oil": 0, "registry": 0})
+            counts["oil"] = counts.get("oil", 0) + 1
+            events.append({
+                "plate": plate,
+                "date": oil_date,
+                "amount": oil_amount,
+                "category": "oil",
+                "detail": "Chi phí thay dầu",
+                "source": "Lịch sử thay dầu",
+            })
+
+    if not df_registration.empty and plate_col in df_registration.columns:
+        registration_view = df_registration[df_registration[plate_col].astype(str).isin(plates)].copy()
+        for _, row in registration_view.iterrows():
+            plate = str(row.get(plate_col, ""))
+            registration_date = parse_user_date(row.get("Ngày đăng kiểm"))
+            registration_amount = parse_money_value(row.get("Chi phí đăng kiểm"))
+            if registration_date is None or registration_amount <= 0:
+                continue
+            all_dates.append(registration_date)
+            counts = plate_type_counts.setdefault(plate, {"repair": 0, "periodic": 0, "oil": 0, "registry": 0})
+            counts["registry"] = counts.get("registry", 0) + 1
+            events.append({
+                "plate": plate,
+                "date": registration_date,
+                "amount": registration_amount,
+                "category": "registry",
+                "detail": "Chi phí đăng kiểm",
+                "source": "Lịch sử đăng kiểm",
+            })
+
     if not df_next.empty and plate_col in df_next.columns:
         next_view = df_next[df_next[plate_col].astype(str).isin(plates)].copy()
         if not next_view.empty:
             for _, row in next_view.iterrows():
                 plate = str(row.get(plate_col, ""))
                 registration_date = parse_user_date(row.get("Ngày đăng kiểm"))
+                if plate in oil_plates and plate in registration_plates:
+                    continue
                 oil_date = registration_date
                 oil_amount = parse_money_value(row.get("Chi phí thay dầu"))
-                if oil_date is not None and oil_amount > 0:
+                if plate not in oil_plates and oil_date is not None and oil_amount > 0:
                     all_dates.append(oil_date)
                     counts = plate_type_counts.setdefault(plate, {"repair": 0, "periodic": 0, "oil": 0, "registry": 0})
                     counts["oil"] = counts.get("oil", 0) + 1
@@ -944,7 +1744,7 @@ def dashboard_cost_summary(data, plates, period="year", selected_value=None):
 
                 registry_date = registration_date
                 registry_amount = parse_money_value(row.get("Chi phí đăng kiểm"))
-                if registry_date is not None and registry_amount > 0:
+                if plate not in registration_plates and registry_date is not None and registry_amount > 0:
                     all_dates.append(registry_date)
                     counts = plate_type_counts.setdefault(plate, {"repair": 0, "periodic": 0, "oil": 0, "registry": 0})
                     counts["registry"] = counts.get("registry", 0) + 1
@@ -1107,7 +1907,7 @@ def dashboard_cost_summary(data, plates, period="year", selected_value=None):
             if counts.get("repair"):
                 count_parts.append({"key": "repair", "text": f'{counts["repair"]} sửa chữa'})
             if counts.get("periodic"):
-                count_parts.append({"key": "periodic", "text": f'{counts["periodic"]} định kỳ'})
+                count_parts.append({"key": "periodic", "text": f'{counts["periodic"]} bảo dưỡng'})
             if counts.get("oil"):
                 count_parts.append({"key": "oil", "text": f'{counts["oil"]} thay dầu'})
             if counts.get("registry"):
@@ -1150,6 +1950,23 @@ def dashboard_cost_summary(data, plates, period="year", selected_value=None):
     }
 
 
+def pagination_items(current, total):
+    """Return compact page numbers with ellipses for long paginated lists."""
+    total = max(1, int(total or 1))
+    current = min(max(1, int(current or 1)), total)
+    if total <= 7:
+        return list(range(1, total + 1))
+
+    visible = {1, total}
+    visible.update(range(max(1, current - 1), min(total, current + 1) + 1))
+    result = []
+    for page_number in sorted(visible):
+        if result and page_number - result[-1] > 1:
+            result.append("ellipsis")
+        result.append(page_number)
+    return result
+
+
 def safe_unique(df, column):
     if df.empty or column not in df.columns:
         return []
@@ -1178,6 +1995,28 @@ def parse_plate_list(value):
     return [item.strip() for item in re.split(r"[,;\n]+", raw) if item.strip()]
 
 
+def access_code_plates(code):
+    """Return the vehicle plates assigned to an access code."""
+    code = str(code or "").strip()
+    if not code:
+        return []
+    init_db()
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT plates FROM access_codes WHERE code = ?",
+            (code,),
+        ).fetchone()
+    return parse_plate_list(row["plates"]) if row else []
+
+
+def access_code_is_in_scope(code, scope_plates):
+    """Area admins may only manage codes assigned entirely to their vehicles."""
+    if not is_area_admin():
+        return True
+    plates = access_code_plates(code)
+    return bool(plates) and set(plates).issubset(set(scope_plates))
+
+
 def format_plate_list(value, labels=None):
     labels = labels or {}
     plates = parse_plate_list(value)
@@ -1186,10 +2025,60 @@ def format_plate_list(value, labels=None):
     return "\n".join(labels.get(plate, plate) for plate in plates)
 
 
+def scoped_vehicle_df(df):
+    """Return only vehicles visible to the current management scope."""
+    if df is None or df.empty or not is_area_admin():
+        return df.copy() if df is not None else pd.DataFrame(columns=XE_DATA_COLUMNS)
+    if CAR_CENTER_COLUMN not in df.columns:
+        return df.iloc[0:0].copy()
+    area_code = current_area_code()
+    return df[
+        df[CAR_CENTER_COLUMN].fillna(MAIN_CENTER_CODE).astype(str).str.strip()
+        == area_code
+    ].copy()
+
+
+def current_center_scope():
+    return current_area_code()
+
+
+def normalize_center_filter(value=None):
+    """Resolve the module selected by an administrator."""
+    if is_area_admin():
+        return current_area_code()
+    candidate = str(value or "").strip()
+    if candidate not in CENTER_FILTER_LABELS:
+        candidate = str(session.get("admin_center_filter", CENTER_FILTER_ALL)).strip()
+    if candidate not in CENTER_FILTER_LABELS:
+        candidate = CENTER_FILTER_ALL
+    return candidate
+
+
+def center_filtered_vehicle_df(df, center_filter):
+    if df is None:
+        return pd.DataFrame(columns=XE_DATA_COLUMNS)
+    if center_filter == CENTER_FILTER_ALL:
+        return df.copy()
+    if CAR_CENTER_COLUMN not in df.columns:
+        return df.iloc[0:0].copy()
+    return df[
+        df[CAR_CENTER_COLUMN].fillna(MAIN_CENTER_CODE).astype(str).str.strip()
+        == center_filter
+    ].copy()
+
+
+def scoped_vehicle_plates(data, include_inactive=True):
+    vehicles = scoped_vehicle_df(data["xe"])
+    if not include_inactive:
+        vehicles = active_vehicle_df(vehicles)
+    return set(safe_unique(vehicles, "Biển số"))
+
+
 def allowed_plates(data):
     info = current_access()
     selected_plates = parse_plate_list(info.get("bien_so"))
-    active_plates = safe_unique(active_vehicle_df(data["xe"]), "Biển số")
+    active_vehicles = scoped_vehicle_df(active_vehicle_df(data["xe"]))
+    active_plates = safe_unique(active_vehicles, "Biển số")
     if selected_plates == ["ALL"]:
         return active_plates
     valid_plates = set(active_plates)
@@ -1239,6 +2128,7 @@ def build_next_service_logs(plate, limit=6):
                 last_service,
                 next_due,
                 suggestion,
+                COALESCE(plan_type, 'periodic') AS plan_type,
                 registry_date,
                 registry_due,
                 oil_cost,
@@ -1259,6 +2149,8 @@ def build_next_service_logs(plate, limit=6):
                 "last_service": row["last_service"] or "Chưa cập nhật",
                 "next_due": row["next_due"] or "Chưa cập nhật",
                 "suggestion": row["suggestion"] or "Chưa cập nhật",
+                "plan_type": normalize_plan_type(row["plan_type"]),
+                "plan_type_label": plan_type_label(row["plan_type"]),
                 "registry_date": row["registry_date"] or "Chưa cập nhật",
                 "registry_due": row["registry_due"] or "Chưa cập nhật",
                 "oil_cost": format_vnd(row["oil_cost"]),
@@ -1267,6 +2159,7 @@ def build_next_service_logs(plate, limit=6):
                 "last_service_raw": date_input_value(row["last_service"]),
                 "next_due_raw": date_input_value(row["next_due"]),
                 "suggestion_raw": row["suggestion"] or "",
+                "plan_type_raw": normalize_plan_type(row["plan_type"]),
                 "registry_date_raw": date_input_value(row["registry_date"]),
                 "registry_due_raw": date_input_value(row["registry_due"]),
                 "oil_cost_raw": format_money_input(row["oil_cost"]),
@@ -1333,20 +2226,31 @@ def extend_access_code(code, extra_hours):
     return True
 
 
-def upsert_vehicle(plate, car_type, manufacture_year, status):
+def upsert_vehicle(plate, car_type, manufacture_year, status, parking_location="", center=None):
     plate = normalize_plate(plate)
     if not plate:
         return False
     init_db()
     with db_connect() as conn:
+        existing = conn.execute(
+            "SELECT center, parking_location FROM cars WHERE plate = ?",
+            (plate,),
+        ).fetchone()
+        if center is None:
+            center = (existing["center"] if existing else None) or MAIN_CENTER_CODE
+        parking_location = str(parking_location or "").strip()
+        if not parking_location and existing:
+            parking_location = str(existing["parking_location"] or "").strip()
         conn.execute(
             """
-            INSERT INTO cars (plate, car_type, manufacture_year, status, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO cars (plate, car_type, manufacture_year, status, center, parking_location, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(plate) DO UPDATE SET
                 car_type = excluded.car_type,
                 manufacture_year = excluded.manufacture_year,
                 status = excluded.status,
+                center = excluded.center,
+                parking_location = excluded.parking_location,
                 updated_at = excluded.updated_at
             """,
             (
@@ -1354,6 +2258,8 @@ def upsert_vehicle(plate, car_type, manufacture_year, status):
                 str(car_type or "").strip(),
                 str(manufacture_year or "").strip(),
                 normalize_vehicle_status(status),
+                str(center or MAIN_CENTER_CODE).strip(),
+                parking_location,
                 now_vn().strftime("%Y-%m-%d %H:%M"),
             ),
         )
@@ -1376,6 +2282,157 @@ def deactivate_vehicle(plate):
     if result.rowcount > 0:
         audit_log("deactivate_vehicle", f"Ngừng hoạt động xe {plate}", plate)
     return result.rowcount > 0
+
+
+def _existing_next_service(conn, plate):
+    return conn.execute(
+        "SELECT * FROM next_services WHERE plate = ?",
+        (normalize_plate(plate),),
+    ).fetchone()
+
+
+def save_maintenance_plan(plate, planned_date, content, plan_type=PLAN_TYPE_PERIODIC):
+    """Save a future maintenance/repair plan without any actual cost."""
+    plate = normalize_plate(plate)
+    planned = parse_user_date(planned_date)
+    content = str(content or "").strip()
+    plan_type = normalize_plan_type(plan_type)
+    if not plate:
+        return False, "Vui lòng chọn xe trước khi thêm kế hoạch."
+    if planned is None:
+        return False, "Vui lòng nhập ngày kế hoạch hợp lệ."
+    if planned.date() <= now_vn().date():
+        return False, "Ngày kế hoạch phải lớn hơn ngày hiện tại."
+    if not content:
+        return False, "Vui lòng nhập nội dung dự kiến."
+
+    init_db()
+    planned_iso = planned.strftime("%Y-%m-%d")
+    saved_at = now_vn().strftime("%Y-%m-%d %H:%M")
+    with db_connect() as conn:
+        current = _existing_next_service(conn, plate)
+        if current and parse_due_date(current["next_due"]):
+            if parse_due_date(current["next_due"]).date() <= now_vn().date():
+                return False, "Kế hoạch đã đến hạn. Hãy cập nhật thực hiện trước khi lập kế hoạch mới."
+        last_service = str(current["last_service"] or "") if current else ""
+        registry_due = str(current["registry_due"] or "") if current else ""
+        registry_odo = str(current["registry_odo"] or "") if current else ""
+        registry_date = str(current["registry_date"] or "") if current else ""
+        oil_cost = parse_money_value(current["oil_cost"] if current else 0)
+        registry_cost = parse_money_value(current["registry_cost"] if current else 0)
+        conn.execute(
+            """
+            INSERT INTO next_service_logs
+            (plate, last_service, next_due, suggestion, plan_type, registry_date, registry_due, oil_cost, registry_cost, saved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (plate, last_service, planned_iso, content, plan_type, registry_date, registry_due, oil_cost, registry_cost, saved_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO next_services
+            (plate, last_service, next_due, suggestion, plan_type, registry_due, registry_odo, registry_date, oil_cost, registry_cost, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(plate) DO UPDATE SET
+                last_service = excluded.last_service,
+                next_due = excluded.next_due,
+                suggestion = excluded.suggestion,
+                plan_type = excluded.plan_type,
+                updated_at = excluded.updated_at
+            """,
+            (plate, last_service, planned_iso, content, plan_type, registry_due, registry_odo, registry_date, oil_cost, registry_cost, saved_at),
+        )
+    clear_cache(SHEET_NEXT)
+    audit_log("save_maintenance_plan", f"Lập kế hoạch {planned_iso} cho xe {plate}", plate)
+    return True, "Đã lưu kế hoạch dự kiến."
+
+
+def complete_maintenance_plan(plate, actual_date, content, cost, cost_type=PLAN_TYPE_PERIODIC):
+    """Convert an due plan into one actual history record."""
+    plate = normalize_plate(plate)
+    content = str(content or "").strip()
+    actual = parse_user_date(actual_date)
+    amount = parse_money_value(cost)
+    cost_type = normalize_plan_type(cost_type)
+    if not plate:
+        return False, "Vui lòng chọn xe trước khi cập nhật thực hiện."
+    if not content:
+        return False, "Vui lòng nhập nội dung thực tế."
+    if actual is None:
+        return False, "Vui lòng nhập ngày thực hiện hợp lệ."
+    if actual.date() > now_vn().date():
+        return False, "Ngày thực hiện không được lớn hơn ngày hiện tại."
+    if amount <= 0:
+        return False, "Vui lòng nhập số tiền thực tế lớn hơn 0."
+
+    init_db()
+    actual_iso = actual.strftime("%Y-%m-%d")
+    with db_connect() as conn:
+        current = _existing_next_service(conn, plate)
+        if not current or not parse_due_date(current["next_due"]):
+            return False, "Xe này chưa có kế hoạch dự kiến để cập nhật thực hiện."
+        planned = parse_due_date(current["next_due"])
+        if planned.date() > now_vn().date():
+            return False, "Chưa đến ngày kế hoạch, chưa thể nhập phần thực hiện."
+        if actual.date() < planned.date():
+            return False, "Ngày thực hiện phải từ ngày kế hoạch trở đi."
+        conn.execute(
+            """
+            INSERT INTO service_history (plate, service_date, content, cost, cost_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (plate, actual_iso, content, amount, cost_type, now_vn().strftime("%Y-%m-%d %H:%M")),
+        )
+        conn.execute(
+            """
+            UPDATE next_services
+            SET last_service = ?, next_due = NULL, suggestion = NULL, oil_cost = 0, updated_at = ?
+            WHERE plate = ?
+            """,
+            (actual_iso, now_vn().strftime("%Y-%m-%d %H:%M"), plate),
+        )
+    clear_cache()
+    audit_log("complete_maintenance_plan", f"Cập nhật thực hiện kế hoạch cho xe {plate}: {amount:g}", plate)
+    return True, "Đã chuyển kế hoạch thành bản ghi lịch sử thực tế."
+
+
+def save_registration(plate, registry_date, registry_due, registry_cost=0, registry_odo=""):
+    """Update inspection fields while leaving the maintenance plan untouched."""
+    plate = normalize_plate(plate)
+    if not plate:
+        return False
+    init_db()
+    with db_connect() as conn:
+        current = _existing_next_service(conn, plate)
+        values = {
+            "last_service": current["last_service"] if current else "",
+            "next_due": current["next_due"] if current else None,
+            "suggestion": current["suggestion"] if current else "",
+            "plan_type": current["plan_type"] if current else PLAN_TYPE_PERIODIC,
+            "registry_due": str(registry_due or "").strip(),
+            "registry_odo": str(registry_odo or "").strip(),
+            "registry_date": str(registry_date or "").strip(),
+            "oil_cost": parse_money_value(current["oil_cost"] if current else 0),
+            "registry_cost": parse_money_value(registry_cost),
+            "updated_at": now_vn().strftime("%Y-%m-%d %H:%M"),
+        }
+        conn.execute(
+            """
+            INSERT INTO next_services
+            (plate, last_service, next_due, suggestion, plan_type, registry_due, registry_odo, registry_date, oil_cost, registry_cost, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(plate) DO UPDATE SET
+                registry_due = excluded.registry_due,
+                registry_odo = excluded.registry_odo,
+                registry_date = excluded.registry_date,
+                registry_cost = excluded.registry_cost,
+                updated_at = excluded.updated_at
+            """,
+            (plate, values["last_service"], values["next_due"], values["suggestion"], values["plan_type"], values["registry_due"], values["registry_odo"], values["registry_date"], values["oil_cost"], values["registry_cost"], values["updated_at"]),
+        )
+    clear_cache(SHEET_NEXT)
+    audit_log("save_registration", f"Cập nhật đăng kiểm cho xe {plate}", plate)
+    return True
 
 
 def upsert_next_service(plate, last_service, next_due, suggestion, registry_date, registry_due, oil_cost, registry_cost):
@@ -1442,7 +2499,7 @@ def sync_next_service_from_latest_log(plate):
     with db_connect() as conn:
         row = conn.execute(
             """
-            SELECT last_service, next_due, suggestion, registry_date, registry_due, oil_cost, registry_cost, saved_at
+            SELECT last_service, next_due, suggestion, plan_type, registry_date, registry_due, oil_cost, registry_cost, saved_at
             FROM next_service_logs
             WHERE plate = ?
             ORDER BY id DESC
@@ -1454,12 +2511,13 @@ def sync_next_service_from_latest_log(plate):
             conn.execute(
                 """
                 INSERT INTO next_services
-                (plate, last_service, next_due, suggestion, registry_due, registry_date, oil_cost, registry_cost, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (plate, last_service, next_due, suggestion, plan_type, registry_due, registry_date, oil_cost, registry_cost, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(plate) DO UPDATE SET
                     last_service = excluded.last_service,
                     next_due = excluded.next_due,
                     suggestion = excluded.suggestion,
+                    plan_type = excluded.plan_type,
                     registry_due = excluded.registry_due,
                     registry_date = excluded.registry_date,
                     oil_cost = excluded.oil_cost,
@@ -1471,6 +2529,7 @@ def sync_next_service_from_latest_log(plate):
                     row["last_service"],
                     row["next_due"],
                     row["suggestion"],
+                    row["plan_type"],
                     row["registry_due"],
                     row["registry_date"],
                     row["oil_cost"],
@@ -1484,7 +2543,7 @@ def sync_next_service_from_latest_log(plate):
     return True
 
 
-def update_next_service_log(record_id, plate, last_service, next_due, suggestion, registry_date, registry_due, oil_cost, registry_cost):
+def update_next_service_log(record_id, plate, last_service, next_due, suggestion, registry_date, registry_due, oil_cost, registry_cost, plan_type=PLAN_TYPE_PERIODIC):
     plate = normalize_plate(plate)
     if not record_id or not plate:
         return False
@@ -1493,13 +2552,14 @@ def update_next_service_log(record_id, plate, last_service, next_due, suggestion
         result = conn.execute(
             """
             UPDATE next_service_logs
-            SET last_service = ?, next_due = ?, suggestion = ?, registry_date = ?, registry_due = ?, oil_cost = ?, registry_cost = ?
+            SET last_service = ?, next_due = ?, suggestion = ?, plan_type = ?, registry_date = ?, registry_due = ?, oil_cost = ?, registry_cost = ?
             WHERE id = ? AND plate = ?
             """,
             (
                 str(last_service or "").strip(),
                 str(next_due or "").strip(),
                 str(suggestion or "").strip(),
+                normalize_plan_type(plan_type),
                 str(registry_date or "").strip(),
                 str(registry_due or "").strip(),
                 parse_money_value(oil_cost),
@@ -1509,7 +2569,6 @@ def update_next_service_log(record_id, plate, last_service, next_due, suggestion
             ),
         )
     if result.rowcount > 0:
-        sync_next_service_from_latest_log(plate)
         audit_log("update_next_log", f"Sửa dòng lịch kế hoạch #{record_id} của xe {plate}", plate)
     return result.rowcount > 0
 
@@ -1522,14 +2581,15 @@ def delete_next_service_log(record_id, plate):
     with db_connect() as conn:
         result = conn.execute("DELETE FROM next_service_logs WHERE id = ? AND plate = ?", (record_id, plate))
     if result.rowcount > 0:
-        sync_next_service_from_latest_log(plate)
         audit_log("delete_next_log", f"Xóa dòng lịch kế hoạch #{record_id} của xe {plate}", plate)
     return result.rowcount > 0
 
 
 def add_history_record(plate, service_date, content, cost, cost_type=COST_TYPE_REPAIR):
     plate = normalize_plate(plate)
-    if not plate:
+    date_value = date_input_value(service_date)
+    content_value = str(content or "").strip()
+    if not plate or not date_value or not content_value:
         return False
     init_db()
     with db_connect() as conn:
@@ -1540,8 +2600,8 @@ def add_history_record(plate, service_date, content, cost, cost_type=COST_TYPE_R
             """,
             (
                 plate,
-                str(service_date or "").strip(),
-                str(content or "").strip(),
+                date_value,
+                content_value,
                 parse_money_value(cost),
                 normalize_history_cost_type(cost_type),
                 now_vn().strftime("%Y-%m-%d %H:%M"),
@@ -1554,7 +2614,9 @@ def add_history_record(plate, service_date, content, cost, cost_type=COST_TYPE_R
 
 def update_history_record(record_id, plate, service_date, content, cost, cost_type=COST_TYPE_REPAIR):
     plate = normalize_plate(plate)
-    if not record_id or not plate:
+    date_value = date_input_value(service_date)
+    content_value = str(content or "").strip()
+    if not record_id or not plate or not date_value or not content_value:
         return False
     init_db()
     with db_connect() as conn:
@@ -1562,15 +2624,16 @@ def update_history_record(record_id, plate, service_date, content, cost, cost_ty
             """
             UPDATE service_history
             SET plate = ?, service_date = ?, content = ?, cost = ?, cost_type = ?
-            WHERE id = ?
+            WHERE id = ? AND plate = ?
             """,
             (
                 plate,
-                str(service_date or "").strip(),
-                str(content or "").strip(),
+                date_value,
+                content_value,
                 parse_money_value(cost),
                 normalize_history_cost_type(cost_type),
                 record_id,
+                plate,
             ),
         )
     clear_cache(SHEET_HISTORY)
@@ -1579,27 +2642,38 @@ def update_history_record(record_id, plate, service_date, content, cost, cost_ty
     return result.rowcount > 0
 
 
-def delete_history_record(record_id):
+def delete_history_record(record_id, plate=""):
     init_db()
     with db_connect() as conn:
-        result = conn.execute("DELETE FROM service_history WHERE id = ?", (record_id,))
+        if plate:
+            result = conn.execute("DELETE FROM service_history WHERE id = ? AND plate = ?", (record_id, normalize_plate(plate)))
+        else:
+            result = conn.execute("DELETE FROM service_history WHERE id = ?", (record_id,))
     clear_cache(SHEET_HISTORY)
     if result.rowcount > 0:
         audit_log("delete_history_record", f"Xóa lịch sử bảo dưỡng #{record_id}")
     return result.rowcount > 0
 
 
-def delete_next_service(plate):
+def delete_maintenance_plan(plate):
     plate = normalize_plate(plate)
     if not plate:
         return False
     init_db()
     with db_connect() as conn:
-        result = conn.execute("DELETE FROM next_services WHERE plate = ?", (plate,))
+        result = conn.execute(
+            "UPDATE next_services SET next_due = NULL, suggestion = NULL, oil_cost = 0, updated_at = ? WHERE plate = ?",
+            (now_vn().strftime("%Y-%m-%d %H:%M"), plate),
+        )
     clear_cache(SHEET_NEXT)
     if result.rowcount > 0:
-        audit_log("delete_next_service", f"Xóa lịch bảo dưỡng/đăng kiểm của xe {plate}", plate)
+        audit_log("delete_next_service", f"Xóa kế hoạch bảo dưỡng của xe {plate}", plate)
     return result.rowcount > 0
+
+
+def delete_next_service(plate):
+    """Backward-compatible alias; only removes the maintenance plan now."""
+    return delete_maintenance_plan(plate)
 
 
 def delete_vehicle(plate):
@@ -1671,20 +2745,20 @@ BASE_TEMPLATE = r"""
     }
     :root {
       color-scheme: light;
-      --bg: #eef5fb;
+      --bg: #f3f7fb;
       --panel: #ffffff;
-      --ink: #09233f;
-      --muted: #5d7288;
-      --line: #cdddec;
-      --soft: #f4f8fc;
+      --ink: #17324d;
+      --muted: #6c7f92;
+      --line: #d8e3ee;
+      --soft: #f7fafd;
       --brand: #005baa;
       --brand-dark: #00457f;
-      --brand-soft: #e7f1fb;
-      --accent: #ed1c24;
-      --accent-dark: #b90f17;
-      --danger: #c62828;
-      --ok: #107c41;
-      --shadow: 0 18px 42px rgba(0, 43, 88, .10);
+      --brand-soft: #edf5fb;
+      --accent: #c84a59;
+      --accent-dark: #a83948;
+      --danger: #b85e6a;
+      --ok: #5b9278;
+      --shadow: 0 12px 28px rgba(0, 43, 88, .07);
     }
     * { box-sizing: border-box; }
     *, *::before, *::after {
@@ -1694,7 +2768,7 @@ BASE_TEMPLATE = r"""
       margin: 0;
       font-family: "SVN-Gilroy", "Roboto", Arial, Helvetica, sans-serif;
       background:
-        linear-gradient(180deg, #f7fbff 0, #eef5fb 280px, #eaf1f8 100%);
+        linear-gradient(180deg, #fbfdff 0, #f3f7fb 280px, #eef4fa 100%);
       color: var(--ink);
       letter-spacing: 0;
       overflow-x: hidden;
@@ -1709,11 +2783,11 @@ BASE_TEMPLATE = r"""
       justify-content: space-between;
       padding: 0 30px;
       background: linear-gradient(90deg, #00457f 0%, #005baa 58%, #006bb6 100%);
-      border-bottom: 4px solid var(--accent);
+      border-bottom: 3px solid var(--accent);
       position: sticky;
       top: 0;
       z-index: 10;
-      box-shadow: 0 12px 30px rgba(0, 54, 108, .18);
+      box-shadow: 0 8px 20px rgba(0, 54, 108, .12);
     }
     button, input, select { font-family: inherit; }
     .brand { display: flex; align-items: center; gap: 13px; font-weight: 800; color: #fff; }
@@ -1804,9 +2878,27 @@ BASE_TEMPLATE = r"""
     .nav a:hover { border-color: #fff; background: rgba(255,255,255,.18); }
     .btn:hover { border-color: #b8c7db; background: #f8fafc; color: var(--brand-dark); }
     .nav a.active:hover { background: #fff; color: var(--brand-dark); }
+    .plan-reminder {
+      border-color: #f2d27a !important;
+      background: #fff7df !important;
+      color: #946200 !important;
+      gap: 6px;
+    }
+    .plan-reminder-count {
+      min-width: 20px;
+      height: 20px;
+      padding: 0 5px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #c62828;
+      color: #fff;
+      font-size: 12px;
+    }
     .btn.primary:hover { background: linear-gradient(180deg, #005baa, #00457f); color: #fff; }
     .page {
-      width: min(1220px, calc(100% - 36px));
+      width: min(1760px, calc(100% - 36px));
       margin: 20px auto 38px;
     }
     .dashboard-page .page {
@@ -1814,6 +2906,14 @@ BASE_TEMPLATE = r"""
     }
     .dashboard-page .dashboard-hero {
       display: none;
+    }
+    .dashboard-module-switcher {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 8px;
+    }
+    .dashboard-module-switcher .toolbar {
+      flex-wrap: wrap;
     }
     .dashboard-page .cost-overview-panel > .section-head {
       display: none;
@@ -1890,10 +2990,36 @@ BASE_TEMPLATE = r"""
       min-width: 0;
       width: 100%;
     }
+    .center-filter-toolbar {
+      flex: 0 0 auto !important;
+      width: auto !important;
+      flex-wrap: nowrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .center-filter-toolbar .btn {
+      white-space: nowrap;
+    }
+    .center-filter-toolbar .btn.active {
+      border-color: var(--brand) !important;
+      background: linear-gradient(180deg, #0068bd, #005baa) !important;
+      color: #fff !important;
+      font-weight: 800 !important;
+      box-shadow: 0 4px 10px rgba(0, 91, 170, .18);
+    }
+    .center-filter-toolbar .btn.active:hover {
+      background: linear-gradient(180deg, #005baa, #00457f) !important;
+      color: #fff !important;
+    }
     h1 { margin: 0; font-size: 28px; letter-spacing: 0; font-weight: 800; }
     h2 { margin: 0 0 10px; font-size: 18px; font-weight: 800; }
     h3 { margin: 0 0 8px; font-size: 15px; }
     .subtle { color: var(--muted); font-size: 14px; }
+    .hero > div > p.subtle,
+    .section-head > div > p.subtle,
+    .public-data-zone-head > p {
+      display: none;
+    }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .grid.single { grid-template-columns: 1fr; }
     .panel {
@@ -2023,6 +3149,10 @@ BASE_TEMPLATE = r"""
     .field { display: grid; gap: 7px; margin-bottom: 16px; min-width: 0; }
     .field .combo { min-width: 0; width: 100%; }
     label { color: var(--muted); font-size: 13px; font-weight: 700; }
+    label.required-field { color: #b3133b; }
+    .required-mark { color: #e0194d; font-weight: 900; }
+    .required-input { border-color: #e0194d; box-shadow: 0 0 0 1px rgba(224, 25, 77, .12); }
+    .required-hint { color: #b3133b; font-size: 12px; font-weight: 700; }
     input, select, textarea {
       width: 100%;
       max-width: 100%;
@@ -2080,7 +3210,7 @@ BASE_TEMPLATE = r"""
     .fact strong { font-size: 16px; }
     .lookup-overview {
       display: grid;
-      grid-template-columns: minmax(260px, .72fr) minmax(0, 1.28fr);
+      grid-template-columns: 1fr;
       gap: 14px;
       align-items: stretch;
     }
@@ -2101,7 +3231,7 @@ BASE_TEMPLATE = r"""
     .vehicle-identity span { color: var(--muted); font-size: 13px; font-weight: 700; }
     .vehicle-compact-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 8px;
     }
     .vehicle-mini {
@@ -2116,6 +3246,81 @@ BASE_TEMPLATE = r"""
       display: grid;
       gap: 12px;
     }
+    .workflow-guide {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .workflow-action {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 58px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfdff;
+    }
+    .workflow-action.ready {
+      border-color: #9cc9ed;
+      background: #f2f8fe;
+    }
+    .workflow-action.attention {
+      border-color: #f2d27a;
+      background: #fff9e9;
+    }
+    .workflow-action.muted { opacity: .82; }
+    .workflow-number {
+      width: 27px;
+      height: 27px;
+      flex: 0 0 27px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--brand);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .workflow-action.attention .workflow-number { background: #d88900; }
+    .workflow-copy { min-width: 0; flex: 1; }
+    .workflow-copy strong { display: block; font-size: 13px; line-height: 1.2; }
+    .workflow-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.25; }
+    .workflow-action .btn { min-height: 32px; padding: 7px 9px; font-size: 12px; white-space: nowrap; }
+    .workflow-cards {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+      gap: 10px;
+    }
+    .workflow-card {
+      display: grid;
+      gap: 10px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    .workflow-card.plan-card { border-top: 3px solid #d88900; }
+    .workflow-card.registry-card { border-top: 3px solid var(--brand); }
+    .workflow-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .workflow-card-head h3 { margin: 0; font-size: 16px; }
+    .workflow-card-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.3; }
+    .workflow-status { white-space: nowrap; }
+    .workflow-data { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .workflow-data-item { padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fbfdff; }
+    .workflow-data-item.full { grid-column: 1 / -1; }
+    .workflow-data-item span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .workflow-data-item strong { display: block; font-size: 14px; line-height: 1.3; overflow-wrap: anywhere; }
+    .workflow-empty { padding: 11px; border: 1px dashed #b8c9da; border-radius: 8px; color: var(--muted); background: #fbfdff; font-size: 13px; line-height: 1.4; }
+    .workflow-inline-step { display: grid; gap: 8px; padding-top: 2px; }
+    .workflow-inline-step h3 { margin: 0; font-size: 15px; }
+    .workflow-note { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .workflow-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .workflow-card-actions .btn { min-height: 36px; }
+    .workflow-history { border-top: 1px solid var(--line); padding-top: 10px; }
+    .workflow-history summary { cursor: pointer; color: var(--brand-dark); font-size: 13px; font-weight: 800; }
+    .workflow-history[open] summary { margin-bottom: 10px; }
+    .legacy-plan-content { display: none; }
     .plan-timeline {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2219,6 +3424,25 @@ BASE_TEMPLATE = r"""
       color: #b3133b;
       border-color: #f0a8b7;
     }
+    .reminder-list { display: grid; gap: 10px; }
+    .reminder-row {
+      display: grid;
+      grid-template-columns: minmax(180px, .85fr) minmax(170px, .7fr) minmax(280px, 1.5fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-left: 4px solid #d88900;
+      border-radius: 10px;
+      background: #fffdf7;
+    }
+    .reminder-row.overdue { border-left-color: #e0194d; background: #fffafa; }
+    .reminder-cell span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .reminder-cell strong { display: block; line-height: 1.35; overflow-wrap: anywhere; }
+    .reminder-cell small { display: block; margin-top: 4px; color: #946200; font-size: 12px; font-weight: 700; }
+    .reminder-row.overdue .reminder-cell small { color: #b3133b; }
+    .reminder-vehicle strong { font-size: 16px; color: var(--brand-dark); }
+    .reminder-action { justify-self: end; white-space: nowrap; }
     .history-filter {
       display: grid;
       grid-template-columns: 1.3fr repeat(2, 160px) auto auto;
@@ -2484,6 +3708,21 @@ BASE_TEMPLATE = r"""
       width: 100%;
       min-height: 40px;
     }
+    .audit-filter {
+      display: grid;
+      gap: 12px;
+      margin: 0 0 18px;
+      padding: 14px;
+      border: 1px solid #cfe0ef;
+      border-radius: 10px;
+      background: #f8fbfe;
+    }
+    .audit-filter-grid {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .audit-filter .form-actions { margin: 0; }
     .audit-log-list {
       display: grid;
       gap: 12px;
@@ -2778,7 +4017,9 @@ BASE_TEMPLATE = r"""
       color: var(--brand-dark);
       font-size: clamp(26px, 3.2vw, 42px);
       line-height: 1.05;
-      font-weight: 900;
+      font-weight: 500;
+      letter-spacing: .018em;
+      font-variant-numeric: tabular-nums;
     }
     .cost-total-card small {
       color: var(--muted);
@@ -2943,7 +4184,7 @@ BASE_TEMPLATE = r"""
       color: var(--brand-dark);
       font-size: clamp(28px, 4vw, 42px);
       line-height: 1.05;
-      font-weight: 900;
+      font-weight: 500;
       overflow-wrap: anywhere;
     }
     .cost-period-label { color: var(--muted); font-size: 13px; }
@@ -2985,6 +4226,29 @@ BASE_TEMPLATE = r"""
       font-size: 12px;
       font-weight: 600;
       line-height: 1.35;
+    }
+    .dashboard-vehicle-table th,
+    .dashboard-vehicle-table td {
+      padding: 8px 12px;
+    }
+    .dashboard-vehicle-table th {
+      font-size: 12px;
+    }
+    .dashboard-vehicle-table td {
+      font-size: 14px;
+    }
+    .dashboard-vehicle-table .due-pill {
+      padding: 4px 7px;
+      font-size: 12px;
+    }
+    .dashboard-vehicle-table td > .subtle {
+      line-height: 1.2;
+    }
+    .dashboard-vehicle-table .cost-cell-breakdown {
+      gap: 1px;
+      margin-top: 3px;
+      font-size: 11px;
+      line-height: 1.2;
     }
     .cost-controls {
       display: flex;
@@ -3162,6 +4426,24 @@ BASE_TEMPLATE = r"""
       gap: 6px;
       color: var(--muted);
       font-size: 13px;
+    }
+    .dashboard-status-legend {
+      width: 100%;
+      border: 0;
+      border-radius: 6px;
+      padding: 4px 6px;
+      background: transparent;
+      font: inherit;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .dashboard-status-legend:hover {
+      background: #f3f8fd;
+    }
+    .dashboard-status-legend:focus-visible {
+      outline: 2px solid var(--brand);
+      outline-offset: 1px;
     }
     .legend-label { display: inline-flex; align-items: center; gap: 7px; }
     .legend-value { color: var(--ink); font-weight: 800; }
@@ -3358,6 +4640,14 @@ BASE_TEMPLATE = r"""
       gap: 6px;
       flex-wrap: wrap;
     }
+    .pagination-ellipsis {
+      min-width: 20px;
+      padding: 0 2px;
+      color: var(--muted);
+      font-weight: 800;
+      text-align: center;
+      user-select: none;
+    }
     .pagination .btn {
       background: #fff;
       border-color: var(--line);
@@ -3469,7 +4759,11 @@ BASE_TEMPLATE = r"""
       .access-card-actions { grid-template-columns: 1fr; }
       .audit-log-card { grid-template-columns: 1fr; }
       .plan-timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .workflow-guide, .workflow-cards { grid-template-columns: 1fr; }
+      .workflow-action { align-items: flex-start; }
       .schedule-log-row { grid-template-columns: 1fr; }
+      .reminder-row { grid-template-columns: 1fr; gap: 9px; }
+      .reminder-action { justify-self: start; }
       .cost-controls { align-items: stretch; flex-direction: column; }
       .cost-tabs { width: 100%; }
       .cost-tab { flex: 1; }
@@ -3482,6 +4776,7 @@ BASE_TEMPLATE = r"""
       .login-visual h1 { white-space: normal; }
       .login-card { padding: 28px; }
       .facts { grid-template-columns: 1fr; }
+      .vehicle-compact-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .next-row { grid-template-columns: 1fr; gap: 4px; }
       table { min-width: 680px; }
     }
@@ -3629,6 +4924,13 @@ BASE_TEMPLATE = r"""
       .hero > .toolbar .btn {
         min-height: 38px;
         padding: 9px 12px;
+      }
+      .center-filter-toolbar {
+        width: 100% !important;
+        flex-wrap: wrap;
+      }
+      .center-filter-toolbar > .btn {
+        flex: 0 1 auto;
       }
       .dashboard-stats {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3860,6 +5162,9 @@ BASE_TEMPLATE = r"""
       .admin-management-panel {
         min-height: auto;
       }
+      .audit-filter-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
       .access-code-card,
       .audit-log-card {
         border-radius: 8px;
@@ -3931,6 +5236,9 @@ BASE_TEMPLATE = r"""
       .section-head .toolbar {
         align-items: stretch;
       }
+      .audit-filter-grid {
+        grid-template-columns: 1fr;
+      }
       .access-code-card,
       .audit-log-card {
         box-shadow: 0 8px 18px rgba(0, 43, 88, .06);
@@ -3963,6 +5271,1024 @@ BASE_TEMPLATE = r"""
         justify-self: start;
       }
     }
+    /* Soft VietinBank palette: keep the brand blue, soften secondary states. */
+    .btn.primary {
+      background: linear-gradient(180deg, #0b6bb3, #005baa);
+    }
+    .btn.primary:hover {
+      background: linear-gradient(180deg, #005baa, #004f91);
+    }
+    .login-page {
+      background:
+        linear-gradient(120deg, rgba(255,255,255,.12) 0 18%, transparent 18% 100%),
+        linear-gradient(135deg, #174f7f 0%, #005baa 52%, #5f536f 100%);
+    }
+    .login-visual {
+      background:
+        linear-gradient(160deg, rgba(0,69,127,.98), rgba(0,91,170,.96) 62%, rgba(200,74,89,.78)),
+        #00457f;
+    }
+    label.required-field,
+    .required-mark,
+    .required-hint {
+      color: #a85f6b;
+    }
+    .required-input {
+      border-color: #b85e6a;
+      box-shadow: 0 0 0 1px rgba(184, 94, 106, .12);
+    }
+    .plan-step {
+      border-left-color: #5c8fb5;
+      background: #fbfdff;
+    }
+    .plan-step.periodic {
+      border-left-color: #5b9278;
+    }
+    .plan-step.registry,
+    .plan-cost.registry {
+      border-left-color: #5c8fb5;
+    }
+    .plan-cost {
+      border-left-color: #b89a62;
+    }
+    .access-copy-code.copied .access-copy-hint {
+      background: #eaf3ee;
+      color: #4f7f68;
+    }
+    .cost-type-pill.repair {
+      background: #f7e9eb;
+      color: #9b5862;
+    }
+    .cost-type-pill.periodic {
+      background: #eaf3ee;
+      color: #4f7f68;
+    }
+    .plan-reminder {
+      border-color: #e2d4b4 !important;
+      background: #fcfaf4 !important;
+      color: #846f42 !important;
+    }
+    .plan-reminder-count {
+      background: #b85e6a;
+    }
+    .metric-card.success,
+    .dashboard-stat.ok {
+      border-left-color: #5b9278;
+    }
+    .metric-card.danger,
+    .dashboard-stat.danger {
+      border-left-color: #b85e6a;
+    }
+    .dashboard-stat.warning {
+      border-left-color: #b89a62;
+    }
+    .dashboard-stat.money {
+      border-left-color: #5c8fb5;
+    }
+    .workflow-action.attention {
+      border-color: #e2d4b4;
+      background: #fcfaf4;
+    }
+    .workflow-action.attention .workflow-number {
+      background: #b89a62;
+    }
+    .workflow-card.plan-card {
+      border-top-color: #b89a62;
+    }
+    .plan-step.periodic {
+      border-left-color: #5b9278;
+    }
+    .plan-step.warning {
+      border-left-color: #b89a62;
+    }
+    .plan-step.danger {
+      border-left-color: #b85e6a;
+    }
+    .alert.warning {
+      background: #fcfaf4;
+      color: #846f42;
+      border-color: #e2d4b4;
+    }
+    .alert.danger {
+      background: #fcf5f6;
+      color: #9b5862;
+      border-color: #e3c2c7;
+    }
+    .reminder-row {
+      border-left-color: #b89a62;
+      background: #fffdf8;
+    }
+    .reminder-row.overdue {
+      border-left-color: #b85e6a;
+      background: #fcf7f8;
+    }
+    .reminder-cell small {
+      color: #846f42;
+    }
+    .reminder-row.overdue .reminder-cell small {
+      color: #9b5862;
+    }
+    .status-pill.active {
+      background: #5b9278;
+    }
+    .status-pill.expired {
+      background: #b85e6a;
+    }
+    tr.access-active td {
+      background: #f5faf7;
+    }
+    tr.access-expired td {
+      background: #fcf7f8;
+    }
+    tr.access-active td:first-child,
+    .access-table-wrap tr.access-active {
+      border-left-color: #5b9278;
+    }
+    tr.access-expired td:first-child,
+    .access-table-wrap tr.access-expired {
+      border-left-color: #b85e6a;
+    }
+    .cost-category-card.repair,
+    .cost-mini.repair {
+      --category-color: #b86b78;
+      border-left-color: #b86b78;
+    }
+    .cost-category-card.periodic,
+    .cost-mini.periodic {
+      --category-color: #5b9278;
+      border-left-color: #5b9278;
+    }
+    .cost-category-card.oil,
+    .cost-mini.oil {
+      --category-color: #b89a62;
+      border-left-color: #b89a62;
+    }
+    .cost-category-card.registry,
+    .cost-mini.registry {
+      --category-color: #5c8fb5;
+      border-left-color: #5c8fb5;
+    }
+    .cost-type-pill.repair,
+    .count-part.repair {
+      background: #f7e9eb;
+      color: #9b5862;
+    }
+    .cost-type-pill.periodic,
+    .count-part.periodic {
+      background: #eaf3ee;
+      color: #4f7f68;
+    }
+    .count-part.oil {
+      background: #f6f0e3;
+      color: #846f42;
+    }
+    .count-part.registry {
+      background: #edf4fa;
+      color: #4e7c9f;
+    }
+    .cost-row-segment.repair {
+      background: #b86b78;
+    }
+    .cost-row-segment.periodic {
+      background: #5b9278;
+    }
+    .cost-row-segment.oil {
+      background: #b89a62;
+    }
+    .cost-row-segment.registry {
+      background: #5c8fb5;
+    }
+    .chart-segment.overdue,
+    .legend-dot.overdue {
+      background: #b85e6a;
+    }
+    .chart-segment.due,
+    .legend-dot.due {
+      background: #b89a62;
+    }
+    .chart-segment.ok,
+    .legend-dot.ok {
+      background: #5b9278;
+    }
+    .chart-segment.missing,
+    .legend-dot.missing {
+      background: #9aabbc;
+    }
+    .due-pill.overdue {
+      background: #f7e9eb;
+      color: #9b5862;
+    }
+    .due-pill.due {
+      background: #f6f0e3;
+      color: #846f42;
+    }
+    .due-pill.ok {
+      background: #eaf3ee;
+      color: #4f7f68;
+    }
+    .due-pill.missing {
+      background: #f0f3f6;
+      color: #6d7f91;
+    }
+    .plan-reminder,
+    .workflow-action.attention,
+    .alert.warning,
+    .alert.danger,
+    .reminder-row,
+    .cost-type-pill,
+    .count-part,
+    .due-pill {
+      box-shadow: none;
+    }
+    /* Pastel status palette: keep VietinBank blue for the brand and primary actions. */
+    :root {
+      --accent: #c97986;
+      --accent-dark: #aa5866;
+      --danger: #c98a96;
+      --ok: #86b99e;
+      --shadow: 0 10px 24px rgba(0, 43, 88, .055);
+    }
+    body {
+      background: linear-gradient(180deg, #fcfdff 0, #f6f9fc 280px, #f1f6fa 100%);
+    }
+    .metric-card.success,
+    .dashboard-stat.ok {
+      border-left-color: #a6cbb5;
+    }
+    .metric-card.danger,
+    .dashboard-stat.danger {
+      border-left-color: #d8a6b0;
+    }
+    .dashboard-stat.warning {
+      border-left-color: #dcc695;
+    }
+    .dashboard-stat.money {
+      border-left-color: #9fc9e6;
+    }
+    .workflow-action.attention,
+    .alert.warning {
+      border-color: #eadcbf;
+      background: #fdf9ef;
+    }
+    .workflow-action.attention .workflow-number {
+      background: #dcc695;
+      color: #806d43;
+    }
+    .workflow-card.plan-card,
+    .plan-step.warning,
+    .plan-cost {
+      border-color: #dcc695;
+    }
+    .plan-step,
+    .plan-step.registry,
+    .plan-cost.registry {
+      border-left-color: #a6cbb5;
+    }
+    .plan-step.periodic {
+      border-left-color: #9fc9e6;
+    }
+    .plan-step.danger,
+    .alert.danger,
+    .reminder-row.overdue {
+      border-left-color: #d8a6b0;
+    }
+    .alert.danger {
+      background: #fcf2f4;
+      color: #a96f79;
+      border-color: #ebcbd1;
+    }
+    .reminder-row {
+      border-left-color: #dcc695;
+      background: #fffdf8;
+    }
+    .reminder-row.overdue {
+      background: #fdf7f8;
+    }
+    .reminder-cell small {
+      color: #927c4c;
+    }
+    .reminder-row.overdue .reminder-cell small {
+      color: #a96f79;
+    }
+    .status-pill.active {
+      background: #a6cbb5;
+      color: #4f7860;
+    }
+    .status-pill.expired {
+      background: #d8a6b0;
+      color: #8f5d68;
+    }
+    .cost-category-card.repair,
+    .cost-mini.repair {
+      --category-color: #d8a6b0;
+      border-left-color: #d8a6b0;
+    }
+    .cost-category-card.periodic,
+    .cost-mini.periodic {
+      --category-color: #9fc9e6;
+      border-left-color: #9fc9e6;
+    }
+    .cost-category-card.oil,
+    .cost-mini.oil {
+      --category-color: #dcc695;
+      border-left-color: #dcc695;
+    }
+    .cost-category-card.registry,
+    .cost-mini.registry {
+      --category-color: #a6cbb5;
+      border-left-color: #a6cbb5;
+    }
+    .cost-type-pill.repair,
+    .count-part.repair,
+    .due-pill.overdue {
+      background: #f8eaed;
+      color: #a96f79;
+    }
+    .cost-type-pill.periodic,
+    .count-part.periodic {
+      background: #edf6fb;
+      color: #547e9d;
+    }
+    .count-part.oil,
+    .due-pill.due {
+      background: #faf5e9;
+      color: #927c4c;
+    }
+    .count-part.registry,
+    .due-pill.ok {
+      background: #eef8f1;
+      color: #5d836c;
+    }
+    .due-pill.missing {
+      background: #f1f4f7;
+      color: #718396;
+    }
+    .cost-row-segment.repair {
+      background: #d8a6b0;
+    }
+    .cost-row-segment.periodic {
+      background: #9fc9e6;
+    }
+    .cost-row-segment.oil {
+      background: #dcc695;
+    }
+    .cost-row-segment.registry {
+      background: #a6cbb5;
+    }
+    .chart-segment.overdue,
+    .legend-dot.overdue {
+      background: #d8a6b0;
+    }
+    .chart-segment.due,
+    .legend-dot.due {
+      background: #dcc695;
+    }
+    .chart-segment.ok,
+    .legend-dot.ok {
+      background: #a6cbb5;
+    }
+    .chart-segment.missing,
+    .legend-dot.missing {
+      background: #b7c5d3;
+    }
+    label.required-field,
+    .required-mark,
+    .required-hint {
+      color: #a96f79;
+    }
+    .required-input {
+      border-color: #d8a6b0;
+      box-shadow: 0 0 0 1px rgba(216, 166, 176, .16);
+    }
+    /* Clear pastel accents: stronger enough for quick scanning without harsh contrast. */
+    :root {
+      --accent: #cc6173;
+      --accent-dark: #a94b5d;
+      --danger: #c56b7b;
+      --ok: #6eaa88;
+    }
+    .metric-card.success,
+    .dashboard-stat.ok {
+      border-left-color: #70aa89;
+    }
+    .metric-card.danger,
+    .dashboard-stat.danger {
+      border-left-color: #c97888;
+    }
+    .dashboard-stat.warning {
+      border-left-color: #c6a05e;
+    }
+    .dashboard-stat.money {
+      border-left-color: #78afd2;
+    }
+    .workflow-action.attention .workflow-number {
+      background: #c6a05e;
+      color: #725a2b;
+    }
+    .plan-step.periodic {
+      border-left-color: #78afd2;
+    }
+    .plan-step.registry,
+    .plan-cost.registry {
+      border-left-color: #70aa89;
+    }
+    .plan-step.warning,
+    .plan-cost {
+      border-left-color: #c6a05e;
+    }
+    .plan-step.danger,
+    .reminder-row.overdue {
+      border-left-color: #c97888;
+    }
+    .status-pill.active {
+      background: #70aa89;
+      color: #315f47;
+    }
+    .status-pill.expired {
+      background: #c97888;
+      color: #7f3f4c;
+    }
+    .cost-category-card.repair,
+    .cost-mini.repair {
+      --category-color: #c97888;
+      border-left-color: #c97888;
+    }
+    .cost-category-card.periodic,
+    .cost-mini.periodic {
+      --category-color: #78afd2;
+      border-left-color: #78afd2;
+    }
+    .cost-category-card.oil,
+    .cost-mini.oil {
+      --category-color: #c6a05e;
+      border-left-color: #c6a05e;
+    }
+    .cost-category-card.registry,
+    .cost-mini.registry {
+      --category-color: #70aa89;
+      border-left-color: #70aa89;
+    }
+    .cost-type-pill.repair,
+    .count-part.repair,
+    .due-pill.overdue {
+      background: #f5dfe4;
+      color: #9d4f61;
+    }
+    .cost-type-pill.periodic,
+    .count-part.periodic {
+      background: #e0eff8;
+      color: #477d9f;
+    }
+    .count-part.oil,
+    .due-pill.due {
+      background: #f7eedc;
+      color: #80662e;
+    }
+    .count-part.registry,
+    .due-pill.ok {
+      background: #e2f1e8;
+      color: #4f7f63;
+    }
+    .due-pill.missing {
+      background: #e7eef4;
+      color: #61788d;
+    }
+    .cost-row-segment.repair {
+      background: #c97888;
+    }
+    .cost-row-segment.periodic {
+      background: #78afd2;
+    }
+    .cost-row-segment.oil {
+      background: #c6a05e;
+    }
+    .cost-row-segment.registry {
+      background: #70aa89;
+    }
+    .chart-segment.overdue,
+    .legend-dot.overdue {
+      background: #c97888;
+    }
+    .chart-segment.due,
+    .legend-dot.due {
+      background: #c6a05e;
+    }
+    .chart-segment.ok,
+    .legend-dot.ok {
+      background: #70aa89;
+    }
+    .chart-segment.missing,
+    .legend-dot.missing {
+      background: #9aafc1;
+    }
+    label.required-field,
+    .required-mark,
+    .required-hint {
+      color: #9d4f61;
+    }
+    .required-input {
+      border-color: #c97888;
+      box-shadow: 0 0 0 1px rgba(201, 120, 136, .18);
+    }
+    /* Stronger pastel palette for readability. */
+    :root {
+      --ink: #102c47;
+      --muted: #5f7388;
+      --line: #c8d9e6;
+      --soft: #f3f7fb;
+      --brand-soft: #e2eef8;
+      --danger: #bd5e70;
+      --ok: #5e9b7a;
+    }
+    .metric-card.success,
+    .dashboard-stat.ok {
+      border-left-color: #5e9b7a;
+    }
+    .metric-card.danger,
+    .dashboard-stat.danger {
+      border-left-color: #bd5e70;
+    }
+    .dashboard-stat.warning {
+      border-left-color: #b88d3f;
+    }
+    .dashboard-stat.money {
+      border-left-color: #5f9fc9;
+    }
+    .workflow-action.attention .workflow-number {
+      background: #b88d3f;
+      color: #624b1d;
+    }
+    .plan-step.periodic {
+      border-left-color: #5f9fc9;
+    }
+    .plan-step.registry,
+    .plan-cost.registry {
+      border-left-color: #5e9b7a;
+    }
+    .plan-step.warning,
+    .plan-cost {
+      border-left-color: #b88d3f;
+    }
+    .plan-step.danger,
+    .reminder-row.overdue {
+      border-left-color: #bd5e70;
+    }
+    .status-pill.active {
+      background: #5e9b7a;
+      color: #fff;
+    }
+    .status-pill.expired {
+      background: #bd5e70;
+      color: #fff;
+    }
+    .cost-category-card.repair,
+    .cost-mini.repair {
+      --category-color: #bd5e70;
+      border-left-color: #bd5e70;
+    }
+    .cost-category-card.periodic,
+    .cost-mini.periodic {
+      --category-color: #5f9fc9;
+      border-left-color: #5f9fc9;
+    }
+    .cost-category-card.oil,
+    .cost-mini.oil {
+      --category-color: #b88d3f;
+      border-left-color: #b88d3f;
+    }
+    .cost-category-card.registry,
+    .cost-mini.registry {
+      --category-color: #5e9b7a;
+      border-left-color: #5e9b7a;
+    }
+    .cost-type-pill.repair,
+    .count-part.repair,
+    .due-pill.overdue {
+      background: #f0d4da;
+      color: #914052;
+    }
+    .cost-type-pill.periodic,
+    .count-part.periodic {
+      background: #d7e9f5;
+      color: #3d6f91;
+    }
+    .count-part.oil,
+    .due-pill.due {
+      background: #f3e8cc;
+      color: #735a22;
+    }
+    .count-part.registry,
+    .due-pill.ok {
+      background: #d8ece0;
+      color: #416d53;
+    }
+    .due-pill.missing {
+      background: #dfe9f0;
+      color: #536d83;
+    }
+    .cost-row-segment.repair {
+      background: #bd5e70;
+    }
+    .cost-row-segment.periodic {
+      background: #5f9fc9;
+    }
+    .cost-row-segment.oil {
+      background: #b88d3f;
+    }
+    .cost-row-segment.registry {
+      background: #5e9b7a;
+    }
+    .chart-segment.overdue,
+    .legend-dot.overdue {
+      background: #bd5e70;
+    }
+    .chart-segment.due,
+    .legend-dot.due {
+      background: #b88d3f;
+    }
+    .chart-segment.ok,
+    .legend-dot.ok {
+      background: #5e9b7a;
+    }
+    .chart-segment.missing,
+    .legend-dot.missing {
+      background: #8ea7bb;
+    }
+    label.required-field,
+    .required-mark,
+    .required-hint {
+      color: #914052;
+    }
+    .required-input {
+      border-color: #bd5e70;
+      box-shadow: 0 0 0 1px rgba(189, 94, 112, .2);
+    }
+    /* Restore the original high-contrast VietinBank status palette. */
+    :root {
+      --bg: #eef5fb;
+      --ink: #09233f;
+      --muted: #5d7288;
+      --line: #cdddec;
+      --soft: #f4f8fc;
+      --brand-soft: #e7f1fb;
+      --accent: #ed1c24;
+      --accent-dark: #b90f17;
+      --danger: #c62828;
+      --ok: #107c41;
+      --shadow: 0 18px 42px rgba(0, 43, 88, .10);
+    }
+    body {
+      background: linear-gradient(180deg, #f7fbff 0, #eef5fb 280px, #eaf1f8 100%);
+    }
+    .topbar {
+      border-bottom-width: 4px;
+      box-shadow: 0 12px 30px rgba(0, 54, 108, .18);
+    }
+    .btn.primary {
+      background: linear-gradient(180deg, #0068bd, #005baa);
+    }
+    .btn.primary:hover {
+      background: linear-gradient(180deg, #005baa, #00457f);
+    }
+    .login-page {
+      background:
+        linear-gradient(120deg, rgba(255,255,255,.08) 0 18%, transparent 18% 100%),
+        linear-gradient(135deg, #003f78 0%, #005baa 48%, #0067b1 68%, #b3133b 100%);
+    }
+    .login-visual {
+      background:
+        linear-gradient(160deg, rgba(0,69,127,.98), rgba(0,91,170,.96) 58%, rgba(237,28,36,.88)),
+        #00457f;
+    }
+    .plan-reminder {
+      border-color: #f2d27a !important;
+      background: #fff7df !important;
+      color: #946200 !important;
+    }
+    .plan-reminder-count {
+      background: #c62828;
+    }
+    label.required-field,
+    .required-hint {
+      color: #b3133b;
+    }
+    .required-mark {
+      color: #e0194d;
+    }
+    .required-input {
+      border-color: #e0194d;
+      box-shadow: 0 0 0 1px rgba(224, 25, 77, .12);
+    }
+    .metric-card.success,
+    .dashboard-stat.ok {
+      border-left-color: #159957;
+    }
+    .metric-card.danger,
+    .dashboard-stat.danger {
+      border-left-color: #c62828;
+    }
+    .dashboard-stat.warning {
+      border-left-color: #d88900;
+    }
+    .dashboard-stat.money {
+      border-left-color: #2563eb;
+    }
+    .workflow-action.attention {
+      border-color: #f2d27a;
+      background: #fff9e9;
+    }
+    .workflow-action.attention .workflow-number {
+      background: #d88900;
+      color: #fff;
+    }
+    .workflow-card.plan-card {
+      border-top-color: #d88900;
+    }
+    .plan-step {
+      border-left-color: #0b75bb;
+    }
+    .plan-step.periodic {
+      border-left-color: #15965f;
+    }
+    .plan-step.registry,
+    .plan-cost.registry {
+      border-left-color: #0b75bb;
+    }
+    .plan-step.warning,
+    .plan-cost {
+      border-left-color: #d88900;
+    }
+    .plan-step.danger,
+    .reminder-row.overdue {
+      border-left-color: #e0194d;
+    }
+    .alert.warning {
+      background: #fff7df;
+      color: #946200;
+      border-color: #f2d27a;
+    }
+    .alert.danger {
+      background: #ffe5e9;
+      color: #b3133b;
+      border-color: #f0a8b7;
+    }
+    .reminder-row {
+      border-left-color: #d88900;
+      background: #fffdf7;
+    }
+    .reminder-row.overdue {
+      background: #fffafa;
+    }
+    .reminder-cell small {
+      color: #946200;
+    }
+    .reminder-row.overdue .reminder-cell small {
+      color: #b3133b;
+    }
+    .status-pill.active {
+      background: #159957;
+      color: #fff;
+    }
+    .status-pill.expired {
+      background: #d91f3f;
+      color: #fff;
+    }
+    tr.access-active td {
+      background: #f6fffa;
+    }
+    tr.access-expired td {
+      background: #fff6f8;
+    }
+    tr.access-active td:first-child,
+    .access-table-wrap tr.access-active {
+      border-left-color: #159957;
+    }
+    tr.access-expired td:first-child,
+    .access-table-wrap tr.access-expired {
+      border-left-color: #d91f3f;
+    }
+    .access-copy-code.copied .access-copy-hint {
+      background: #dff7e9;
+      color: #0b6f3d;
+    }
+    .cost-category-card.repair,
+    .cost-mini.repair {
+      --category-color: #d91f3f;
+      border-left-color: #d91f3f;
+    }
+    .cost-category-card.periodic,
+    .cost-mini.periodic {
+      --category-color: #159957;
+      border-left-color: #159957;
+    }
+    .cost-category-card.oil,
+    .cost-mini.oil {
+      --category-color: #d88900;
+      border-left-color: #d88900;
+    }
+    .cost-category-card.registry,
+    .cost-mini.registry {
+      --category-color: #0b75bb;
+      border-left-color: #0b75bb;
+    }
+    .cost-type-pill.repair,
+    .count-part.repair,
+    .due-pill.overdue {
+      background: #ffe5e9;
+      color: #b3133b;
+    }
+    .cost-type-pill.periodic,
+    .count-part.periodic {
+      background: #dff7e9;
+      color: #0b6f3d;
+    }
+    .count-part.oil,
+    .due-pill.due {
+      background: #fff3d9;
+      color: #9a6400;
+    }
+    .count-part.registry {
+      background: #e5f2fb;
+      color: #075f99;
+    }
+    .due-pill.ok {
+      background: #dff7e9;
+      color: #107c41;
+    }
+    .due-pill.missing {
+      background: #eef2f6;
+      color: #637386;
+    }
+    .cost-row-segment.repair {
+      background: #e0194d;
+    }
+    .cost-row-segment.periodic {
+      background: #15965f;
+    }
+    .cost-row-segment.oil {
+      background: #d88900;
+    }
+    .cost-row-segment.registry {
+      background: #0b75bb;
+    }
+    .chart-segment.overdue,
+    .legend-dot.overdue {
+      background: #c62828;
+    }
+    .chart-segment.due,
+    .legend-dot.due {
+      background: #d88900;
+    }
+    .chart-segment.ok,
+    .legend-dot.ok {
+      background: #107c41;
+    }
+    .chart-segment.missing,
+    .legend-dot.missing {
+      background: #93a4b7;
+    }
+    /* Swap the periodic-maintenance and inspection colors. */
+    .plan-step.periodic {
+      border-left-color: #0b75bb;
+    }
+    .plan-step.registry,
+    .plan-cost.registry {
+      border-left-color: #15965f;
+    }
+    .cost-category-card.periodic,
+    .cost-mini.periodic {
+      --category-color: #0b75bb;
+      border-left-color: #0b75bb;
+    }
+    .cost-category-card.registry,
+    .cost-mini.registry {
+      --category-color: #159957;
+      border-left-color: #159957;
+    }
+    .cost-type-pill.periodic,
+    .count-part.periodic {
+      background: #e5f2fb;
+      color: #075f99;
+    }
+    .count-part.registry {
+      background: #dff7e9;
+      color: #0b6f3d;
+    }
+    .cost-row-segment.periodic {
+      background: #0b75bb;
+    }
+    .cost-row-segment.registry {
+      background: #15965f;
+    }
+    /* Mobile layout: keep controls readable and prevent desktop grids from
+       forcing horizontal scrolling on phones and small tablets. */
+    @media (max-width: 820px) {
+      .page {
+        width: calc(100% - 24px);
+        margin: 14px auto 28px;
+      }
+      .dashboard-module-switcher {
+        justify-content: stretch;
+      }
+      .dashboard-module-switcher .toolbar,
+      .center-filter-toolbar {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100% !important;
+        flex-wrap: unset;
+        gap: 8px;
+      }
+      .dashboard-module-switcher .toolbar .btn,
+      .center-filter-toolbar .btn {
+        width: 100%;
+        min-width: 0;
+        min-height: 42px;
+        padding: 9px 8px;
+        font-size: 13px;
+        line-height: 1.2;
+        white-space: normal;
+      }
+      .center-filter-toolbar .badge {
+        grid-column: 1 / -1;
+        justify-self: start;
+      }
+      .dashboard-list-controls {
+        display: grid;
+        grid-template-columns: 1fr;
+        align-items: stretch;
+      }
+      .dashboard-list-search,
+      .dashboard-list-size {
+        width: 100%;
+        min-width: 0;
+      }
+      .dashboard-list-search .vehicle-search {
+        width: 100%;
+        min-width: 0;
+      }
+      .dashboard-list-size {
+        justify-content: space-between;
+        white-space: normal;
+      }
+      .cost-total-card strong {
+        font-size: clamp(24px, 7.2vw, 32px);
+        overflow-wrap: anywhere;
+      }
+      .maintenance-toolbar select {
+        width: 100%;
+        min-width: 0;
+      }
+      .public-record-table-wrap {
+        max-width: 100%;
+        overflow-x: auto;
+      }
+    }
+    @media (max-width: 480px) {
+      .page {
+        width: calc(100% - 16px);
+        margin-top: 10px;
+      }
+      .topbar {
+        padding: 10px;
+      }
+      .brand-name {
+        font-size: 19px;
+      }
+      .brand-kicker {
+        font-size: 8px;
+      }
+      .panel {
+        padding: 11px;
+        border-radius: 8px;
+      }
+      .dashboard-stats {
+        gap: 7px;
+      }
+      .dashboard-stat {
+        min-height: 78px;
+        padding: 9px;
+      }
+      .dashboard-stat strong {
+        font-size: 20px;
+      }
+      .cost-total-card strong {
+        font-size: 23px;
+      }
+      .center-filter-toolbar .btn,
+      .dashboard-module-switcher .toolbar .btn {
+        min-height: 40px;
+        font-size: 12px;
+      }
+      .dashboard-modal-backdrop {
+        padding: 8px;
+      }
+      .dashboard-modal-head {
+        padding: 13px;
+      }
+      .dashboard-modal-body {
+        padding: 9px;
+      }
+    }
   </style>
 </head>
 <body class="{% if active == 'dashboard' %}dashboard-page{% endif %}">
@@ -3988,8 +6314,13 @@ BASE_TEMPLATE = r"""
         <span class="nav-title">Menu</span>
         <a class="{{ 'active' if active == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}">Dashboard</a>
         <a class="{{ 'active' if active == 'detail' else '' }}" href="{{ url_for('detail') }}">Chi tiết</a>
-        {% if is_admin %}
-          <a class="{{ 'active' if active in ['data', 'admin'] else '' }}" href="{{ url_for('admin_data') }}">Quản trị</a>
+        {% if can_manage_data %}
+          <a class="{{ 'active' if active in ['data', 'admin'] else '' }}" href="{{ url_for('admin_data') }}">{{ management_label if is_center_admin else 'Quản trị' }}</a>
+        {% endif %}
+        {% if plan_alerts %}
+          <a class="plan-reminder" href="{{ url_for('maintenance_alerts') }}" title="Xem danh sách kế hoạch dự kiến chưa cập nhật thực tế">
+            Nhắc việc <span class="plan-reminder-count">{{ plan_alerts|length }}</span>
+          </a>
         {% endif %}
         <a href="{{ url_for('logout') }}">Đăng xuất</a>
       </nav>
@@ -4080,6 +6411,10 @@ def page(content, title="Quản lý xe Vietinbank", active="detail", login_page=
         logout_url=url_for("logout"),
         inactivity_timeout_ms=INACTIVITY_TIMEOUT_MINUTES * 60 * 1000,
         is_admin=is_admin(),
+        is_center_admin=is_area_admin(),
+        management_label=current_area_label(),
+        can_manage_data=can_manage_data(),
+        plan_alerts=pending_maintenance_plan_alerts(),
         messages=flash_messages(),
     )
 
@@ -4093,6 +6428,20 @@ def login():
             touch_last_activity()
             audit_log("login", "Đăng nhập quản trị")
             return redirect(url_for("dashboard"))
+
+        for area_code, area_key in AREA_ADMIN_KEYS.items():
+            if area_key and code == area_key:
+                session["access_info"] = {
+                    "code": area_key,
+                    "bien_so": "ALL",
+                    "cap_time": None,
+                    "role": "area_admin",
+                    "area": area_code,
+                    "center": area_code,
+                }
+                touch_last_activity()
+                audit_log("login", f"Đăng nhập quản trị {CENTER_FILTER_LABELS[area_code]}")
+                return redirect(url_for("dashboard"))
 
         df = worksheet_df(SHEET_ACCESS, ["MaTruyCap", "BienSo", "ThoiDiemCap", "ThoiHanGio"])
         row = df[df["MaTruyCap"].astype(str) == code] if not df.empty else pd.DataFrame()
@@ -4130,18 +6479,18 @@ def login():
                     <span class="brand-kicker">QUẢN LÝ XE</span>
                   </span>
                 </div>
-                <h1>Cổng tra cứu bảo dưỡng xe</h1>
-                <p>Theo dõi thông tin phương tiện, lịch bảo dưỡng và chi phí vận hành.</p>
+                <h1>Hệ thống quản lý xe</h1>
+                <p>Quản lý phương tiện, lịch bảo dưỡng, đăng kiểm và chi phí vận hành.</p>
               </div>
               <div class="login-stats">
-                <div class="login-stat"><strong>Mã truy cập</strong><span>Hiệu lực trong 24 giờ</span></div>
-                <div class="login-stat"><strong>Báo cáo Excel</strong><span>Tải lịch sử bảo dưỡng</span></div>
+                <div class="login-stat"><strong>Truy cập hệ thống</strong><span>Theo thời hạn được cấp</span></div>
+                <div class="login-stat"><strong>Báo cáo vận hành</strong><span>Xuất lịch sử bảo dưỡng</span></div>
               </div>
             </section>
             <form class="login-card" method="post">
               {{ messages|safe }}
               <h1>Đăng nhập</h1>
-              <p>Nhập mã truy cập được cấp để tiếp tục.</p>
+              <p>Nhập mã truy cập để tiếp tục.</p>
               <div class="field">
                 <label for="code">Mã truy cập</label>
                 <input id="code" name="code" type="password" autocomplete="current-password" autofocus>
@@ -4173,7 +6522,13 @@ def refresh_data():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    data = load_data(["xe", "history", "next"])
+    data = load_data(["xe", "history", "next", "oil", "registration"])
+    if can_manage_data():
+        default_center = current_center_scope() if is_area_admin() else CENTER_FILTER_ALL
+        center_filter = normalize_center_filter(request.args.get("center") or default_center)
+        data["xe"] = center_filtered_vehicle_df(scoped_vehicle_df(data["xe"]), center_filter)
+    else:
+        center_filter = CENTER_FILTER_ALL
     plates = allowed_plates(data)
     if not plates:
         content = """
@@ -4220,6 +6575,18 @@ def dashboard():
         {"key": "attention", "title": "Hạng mục sắp đến hạn", "rows": due_popup_rows, "row_type": "due", "unit": "lượt"},
         {"key": "history", "title": "Lịch sử bảo dưỡng", "rows": history_popup_rows, "row_type": "history", "unit": "lượt"},
     ]
+    for status_field, status_title in (("registry", "Đăng kiểm"), ("maintenance", "Bảo dưỡng")):
+        for status_key, status_label in (("overdue", "Quá hạn"), ("due", "Sắp đến hạn"), ("ok", "Còn hạn"), ("missing", "Chưa cập nhật")):
+            if status_field == "registry" and status_key == "overdue":
+                continue
+            dashboard_modal_groups.append(
+                {
+                    "key": f"{status_field}-{status_key}",
+                    "title": f"{status_title}: {status_label}",
+                    "rows": [row for row in rows if row[status_field].get("key") == status_key],
+                    "unit": "xe",
+                }
+            )
     dashboard_query = request.args.get("q", "").strip()
     filtered_rows = rows
     if dashboard_query:
@@ -4247,6 +6614,7 @@ def dashboard():
         dashboard_page = 1
     if dashboard_page > dashboard_total_pages:
         dashboard_page = dashboard_total_pages
+    dashboard_pagination_pages = pagination_items(dashboard_page, dashboard_total_pages)
     dashboard_start = (dashboard_page - 1) * dashboard_per_page
     dashboard_end = min(dashboard_start + dashboard_per_page, len(filtered_rows))
     dashboard_page_rows = filtered_rows[dashboard_start:dashboard_end]
@@ -4278,9 +6646,9 @@ def dashboard():
     cost_chart_total = sum(float(item.get("raw") or 0) for item in cost_stats.get("categories", []))
     cost_chart_colors = {
         "repair": "#d91f3f",
-        "periodic": "#159957",
+        "periodic": "#0b75bb",
         "oil": "#d88900",
-        "registry": "#0b75bb",
+        "registry": "#159957",
     }
     cost_chart_segments = []
     cursor = 0.0
@@ -4312,6 +6680,20 @@ def dashboard():
             <p class="subtle">Dashboard đăng kiểm, bảo dưỡng và các xe cần chú ý.</p>
           </div>
         </section>
+
+        {% if root_admin %}
+          <section class="dashboard-module-switcher">
+            <div class="toolbar">
+              {% for center_code, center_label in center_filters.items() %}
+                <a class="btn {{ 'primary' if center_filter == center_code else '' }}" href="{{ url_for('dashboard', center=center_code, cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, q=dashboard_query) }}">{{ center_label }}</a>
+              {% endfor %}
+            </div>
+          </section>
+        {% else %}
+          <section class="dashboard-module-switcher">
+            <span class="badge">{{ center_filter_label }}</span>
+          </section>
+        {% endif %}
 
         <section class="dashboard-stats">
           <button class="dashboard-stat dashboard-stat-linkcard" type="button" data-dashboard-modal="all">
@@ -4449,11 +6831,12 @@ def dashboard():
           </div>
           <div class="cost-controls">
             <div class="cost-tabs" role="tablist" aria-label="Chọn kỳ chi phí">
-              <a class="cost-tab {{ 'active' if cost_stats.period == 'month' else '' }}" href="{{ url_for('dashboard', cost_period='month', cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, q=dashboard_query) }}">Tháng</a>
-              <a class="cost-tab {{ 'active' if cost_stats.period == 'quarter' else '' }}" href="{{ url_for('dashboard', cost_period='quarter', cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, q=dashboard_query) }}">Quý</a>
-              <a class="cost-tab {{ 'active' if cost_stats.period == 'year' else '' }}" href="{{ url_for('dashboard', cost_period='year', cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, q=dashboard_query) }}">Năm</a>
+              <a class="cost-tab {{ 'active' if cost_stats.period == 'month' else '' }}" href="{{ url_for('dashboard', center=center_filter, cost_period='month', cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, q=dashboard_query) }}">Tháng</a>
+              <a class="cost-tab {{ 'active' if cost_stats.period == 'quarter' else '' }}" href="{{ url_for('dashboard', center=center_filter, cost_period='quarter', cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, q=dashboard_query) }}">Quý</a>
+              <a class="cost-tab {{ 'active' if cost_stats.period == 'year' else '' }}" href="{{ url_for('dashboard', center=center_filter, cost_period='year', cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, q=dashboard_query) }}">Năm</a>
             </div>
             <form method="get" action="{{ url_for('dashboard') }}">
+              <input type="hidden" name="center" value="{{ center_filter }}">
               <input type="hidden" name="cost_period" value="{{ cost_stats.period }}">
               <input type="hidden" name="q" value="{{ dashboard_query }}">
               {% if cost_stats.period == 'month' %}
@@ -4575,10 +6958,10 @@ def dashboard():
                 </div>
                 <div class="chart-legend">
                   {% for segment in registry_segments %}
-                    <div class="legend-item">
+                    <button class="legend-item dashboard-status-legend" type="button" data-dashboard-modal="registry-{{ segment.key }}" aria-label="Xem xe đăng kiểm {{ segment.label }}">
                       <span class="legend-label"><span class="legend-dot {{ segment.key }}"></span>{{ segment.label }}</span>
                       <strong class="legend-value">{{ segment.value }}</strong>
-                    </div>
+                    </button>
                   {% endfor %}
                 </div>
               </div>
@@ -4597,10 +6980,10 @@ def dashboard():
                 </div>
                 <div class="chart-legend">
                   {% for segment in maintenance_segments %}
-                    <div class="legend-item">
+                    <button class="legend-item dashboard-status-legend" type="button" data-dashboard-modal="maintenance-{{ segment.key }}" aria-label="Xem xe bảo dưỡng {{ segment.label }}">
                       <span class="legend-label"><span class="legend-dot {{ segment.key }}"></span>{{ segment.label }}</span>
                       <strong class="legend-value">{{ segment.value }}</strong>
-                    </div>
+                    </button>
                   {% endfor %}
                 </div>
               </div>
@@ -4644,6 +7027,7 @@ def dashboard():
           </div>
           <div class="dashboard-list-controls">
             <form class="dashboard-list-search" method="get">
+              <input type="hidden" name="center" value="{{ center_filter }}">
               <input type="hidden" name="cost_period" value="{{ cost_stats.period }}">
               <input type="hidden" name="cost_month" value="{{ cost_month }}">
               <input type="hidden" name="cost_quarter" value="{{ cost_quarter }}">
@@ -4654,13 +7038,14 @@ def dashboard():
                 <input id="dashboard-q" name="q" value="{{ dashboard_query }}" placeholder="Tìm biển số hoặc loại xe">
               </div>
               {% if dashboard_query %}
-                <a class="btn" href="{{ url_for('dashboard', cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page) }}">Xóa lọc</a>
+                <a class="btn" href="{{ url_for('dashboard', center=center_filter, cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page) }}">Xóa lọc</a>
               {% endif %}
             </form>
             <span class="subtle">
               Hiển thị {{ dashboard_start + 1 if dashboard_list_total else 0 }}-{{ dashboard_end }} / {{ dashboard_list_total }} xe
             </span>
             <form class="dashboard-list-size" method="get">
+              <input type="hidden" name="center" value="{{ center_filter }}">
               <input type="hidden" name="cost_period" value="{{ cost_stats.period }}">
               <input type="hidden" name="cost_month" value="{{ cost_month }}">
               <input type="hidden" name="cost_quarter" value="{{ cost_quarter }}">
@@ -4675,7 +7060,7 @@ def dashboard():
               </select>
             </form>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap dashboard-vehicle-table">
             <table>
               <thead>
                 <tr>
@@ -4703,11 +7088,6 @@ def dashboard():
                     <td data-label="Lịch sử">{{ row.history_count }} lần</td>
                     <td class="cost" data-label="Chi phí">
                       <strong>{{ row.total_cost }}</strong>
-                      <div class="cost-cell-breakdown">
-                        {% for item in row.cost_breakdown %}
-                          <span>{{ item.label }}: {{ item.amount }}</span>
-                        {% endfor %}
-                      </div>
                     </td>
                   </tr>
                 {% endfor %}
@@ -4718,11 +7098,17 @@ def dashboard():
             <div class="pagination">
               <span class="subtle">Trang {{ dashboard_page }}/{{ dashboard_total_pages }}</span>
               <div class="pagination-pages">
-                <a class="btn {{ 'disabled' if dashboard_page <= 1 else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=dashboard_page - 1, q=dashboard_query) }}">&lsaquo; Trước</a>
-                {% for p in range(1, dashboard_total_pages + 1) %}
-                  <a class="btn {{ 'active' if p == dashboard_page else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=p, q=dashboard_query) }}">{{ p }}</a>
+                <a class="btn {{ 'disabled' if dashboard_page <= 1 else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', center=center_filter, cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=1, q=dashboard_query) }}">&laquo; Đầu</a>
+                <a class="btn {{ 'disabled' if dashboard_page <= 1 else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', center=center_filter, cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=dashboard_page - 1, q=dashboard_query) }}">&lsaquo; Trước</a>
+                {% for p in dashboard_pagination_pages %}
+                  {% if p == 'ellipsis' %}
+                    <span class="pagination-ellipsis" aria-hidden="true">&hellip;</span>
+                  {% else %}
+                    <a class="btn {{ 'active' if p == dashboard_page else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', center=center_filter, cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=p, q=dashboard_query) }}">{{ p }}</a>
+                  {% endif %}
                 {% endfor %}
-                <a class="btn {{ 'disabled' if dashboard_page >= dashboard_total_pages else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=dashboard_page + 1, q=dashboard_query) }}">Sau &rsaquo;</a>
+                <a class="btn {{ 'disabled' if dashboard_page >= dashboard_total_pages else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', center=center_filter, cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=dashboard_page + 1, q=dashboard_query) }}">Sau &rsaquo;</a>
+                <a class="btn {{ 'disabled' if dashboard_page >= dashboard_total_pages else '' }}" data-dashboard-preserve-scroll href="{{ url_for('dashboard', center=center_filter, cost_period=cost_stats.period, cost_month=cost_month, cost_quarter=cost_quarter, cost_year=cost_year, dashboard_per_page=dashboard_per_page, dashboard_page=dashboard_total_pages, q=dashboard_query) }}">Cuối &raquo;</a>
               </div>
             </div>
           {% endif %}
@@ -4781,6 +7167,7 @@ def dashboard():
         dashboard_per_page=dashboard_per_page,
         dashboard_page=dashboard_page,
         dashboard_total_pages=dashboard_total_pages,
+        dashboard_pagination_pages=dashboard_pagination_pages,
         dashboard_start=dashboard_start,
         dashboard_end=dashboard_end,
         dashboard_list_total=dashboard_list_total,
@@ -4797,6 +7184,11 @@ def dashboard():
         cost_quarter=cost_quarter,
         cost_year=cost_year,
         status_text=status_text,
+        root_admin=is_admin(),
+        center_admin=is_center_admin(),
+        center_filter=center_filter,
+        center_filter_label=CENTER_FILTER_LABELS.get(center_filter, CENTER_FILTER_LABELS[CENTER_FILTER_ALL]),
+        center_filters=CENTER_FILTER_LABELS,
     )
     return page(content, title="Quản lý xe Vietinbank", active="dashboard")
 
@@ -4808,10 +7200,381 @@ def home():
     return redirect(url_for("login"))
 
 
+@app.route("/maintenance-alerts")
+@login_required
+def maintenance_alerts():
+    alerts = pending_maintenance_plan_alerts()
+    content = render_template_string(
+        r"""
+        <section class="hero">
+          <div>
+            <h1>Nhắc việc cần cập nhật</h1>
+            <p class="subtle">Danh sách các lịch bảo dưỡng hoặc đăng kiểm đã đến hạn theo dữ liệu mới nhất.</p>
+          </div>
+          <div class="toolbar"><span class="badge">{{ alerts|length }} công việc</span><a class="btn" href="{{ url_for('dashboard') }}">Về Dashboard</a></div>
+        </section>
+        <section class="panel">
+          <div class="section-head"><div><h2>Danh sách công việc cần làm</h2><p class="subtle" style="margin:3px 0 0">Mở hồ sơ từng xe để cập nhật bản ghi thực tế tương ứng.</p></div></div>
+          <div hidden aria-hidden="true" id="legacy-maintenance-alert-label">Danh sách kế hoạch dự kiến chưa cập nhật <span data-alert-complete-open></span><span id="alert-complete-modal"></span></div>
+          {% if alerts %}
+            <div class="reminder-list">
+              {% for alert in alerts %}
+                <article class="reminder-row {{ 'overdue' if alert.overdue_days > 0 else '' }}">
+                  <div class="reminder-cell reminder-vehicle"><span>Xe</span><strong>{{ alert.plate }}</strong><small>{{ alert.car_type or 'Chưa cập nhật' }} · {{ alert.center_label }}</small></div>
+                  <div class="reminder-cell"><span>Hạng mục</span><strong>{{ alert.plan_type_label }}</strong><small>{{ 'Quá hạn ' ~ alert.overdue_days ~ ' ngày' if alert.overdue_days > 0 else 'Đến hạn hôm nay' }}</small></div>
+                  <div class="reminder-cell"><span>Lịch dự kiến</span><strong>{{ alert.planned_date }}</strong><small>{{ alert.content }}</small></div>
+                  {% if can_manage_data %}<a class="btn primary reminder-action" href="{{ url_for('admin_data', tab='maintenance', plate=alert.plate) }}">Cập nhật</a>{% else %}<a class="btn reminder-action" href="{{ url_for('detail', plate=alert.plate) }}">Xem xe</a>{% endif %}
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}<div class="empty">Hiện không có lịch nào đến hạn cần cập nhật.</div>{% endif %}
+        </section>
+        """,
+        alerts=alerts,
+        can_manage_data=can_manage_data(),
+    )
+    return page(content, title="Nhắc việc cần cập nhật", active="alerts")
+
+    # Kept below for backwards compatibility with old deployment snapshots.
+    content = render_template_string(
+        r"""
+        <section class="hero">
+          <div>
+            <h1>Kế hoạch dự kiến chưa cập nhật</h1>
+            <p class="subtle">Danh sách các kế hoạch dự kiến đã đến hạn hoặc quá hạn nhưng chưa ghi nhận trạng thái thực tế.</p>
+          </div>
+          <div class="toolbar">
+            <span class="badge">{{ alerts|length }} kế hoạch</span>
+            <a class="btn" href="{{ url_for('dashboard') }}">Về Dashboard</a>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Danh sách kế hoạch dự kiến chưa cập nhật</h2>
+              <p class="subtle" style="margin:3px 0 0">Chọn “Cập nhật thực tế” ở từng dòng để ghi nhận ngày thực hiện, nội dung và số tiền.</p>
+            </div>
+          </div>
+          {% if alerts %}
+            <div class="reminder-list">
+              {% for alert in alerts %}
+                <article class="reminder-row {{ 'overdue' if alert.overdue_days > 0 else '' }}">
+                  <div class="reminder-cell reminder-vehicle">
+                    <span>Xe</span>
+                    <strong>{{ alert.plate }}</strong>
+                    <small>{{ alert.car_type or 'Chưa cập nhật' }} · {{ alert.center_label }}</small>
+                  </div>
+                  <div class="reminder-cell">
+                    <span>Loại kế hoạch</span>
+                    <strong>{{ alert.plan_type_label }}</strong>
+                    <small>Chưa cập nhật thực tế · {{ 'quá hạn ' ~ alert.overdue_days ~ ' ngày' if alert.overdue_days > 0 else 'đến hạn hôm nay' }}</small>
+                  </div>
+                  <div class="reminder-cell">
+                    <span>Kế hoạch dự kiến</span>
+                    <strong>{{ alert.planned_date }}</strong>
+                    <small>{{ alert.content or 'Chưa nhập nội dung' }}</small>
+                  </div>
+                  {% if can_manage_data %}
+                    <button
+                      class="btn primary reminder-action"
+                      type="button"
+                      data-alert-complete-open
+                      data-plate="{{ alert.plate }}"
+                      data-planned-date="{{ alert.planned_date_raw }}"
+                      data-plan-type="{{ alert.plan_type }}"
+                      data-content="{{ alert.content }}"
+                    >Cập nhật thực tế</button>
+                  {% else %}
+                    <a class="btn reminder-action" href="{{ url_for('detail', plate=alert.plate) }}">Xem xe</a>
+                  {% endif %}
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty">Hiện không có kế hoạch dự kiến nào cần cập nhật thực tế.</div>
+          {% endif %}
+        </section>
+        {% if can_manage_data %}
+          <div class="inline-modal-backdrop" id="alert-complete-modal" hidden>
+            <div class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="alert-complete-modal-title">
+              <div class="inline-modal-head">
+                <h3 id="alert-complete-modal-title">Cập nhật đã thực hiện</h3>
+                <button class="dashboard-modal-close" type="button" data-alert-complete-close aria-label="Đóng">×</button>
+              </div>
+              <div class="inline-modal-body">
+                <form method="post" action="{{ url_for('admin_data') }}">
+                  <input type="hidden" name="action" value="complete_plan">
+                  <input type="hidden" name="plate" id="alert-complete-plate">
+                  <input type="hidden" name="return_to" value="alerts">
+                  <div class="inline-modal-grid">
+                    <div class="form-row">
+                      <div class="field">
+                        <label class="required-field" for="alert-complete-date">Ngày thực hiện <span class="required-mark" aria-hidden="true">*</span></label>
+                        <input id="alert-complete-date" class="required-input" name="actual_date" type="date" max="{{ today }}" value="{{ today }}" required>
+                      </div>
+                      <div class="field">
+                        <label class="required-field" for="alert-complete-cost">Số tiền thực tế <span class="required-mark" aria-hidden="true">*</span></label>
+                        <input id="alert-complete-cost" class="money-input required-input" name="cost" inputmode="numeric" autocomplete="off" placeholder="VD: 1.500.000" required>
+                      </div>
+                    </div>
+                    <div class="required-hint">* Bắt buộc nhập. Ngày thực hiện đang mặc định là hôm nay, có thể thay đổi nếu cần.</div>
+                    <div class="field">
+                      <label for="alert-complete-type">Loại thực hiện</label>
+                      <select id="alert-complete-type" name="cost_type">
+                        <option value="periodic">Bảo dưỡng định kỳ</option>
+                        <option value="repair">Sửa chữa</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label for="alert-complete-content">Nội dung thực tế</label>
+                      <textarea id="alert-complete-content" name="content" required></textarea>
+                    </div>
+                    <div class="inline-modal-actions">
+                      <button class="btn" type="button" data-alert-complete-close>Hủy</button>
+                      <button class="btn primary" type="submit">Cập nhật đã thực hiện</button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+          <script>
+            (() => {
+              const modal = document.getElementById("alert-complete-modal");
+              if (!modal) return;
+              const plate = modal.querySelector("#alert-complete-plate");
+              const date = modal.querySelector("#alert-complete-date");
+              const cost = modal.querySelector("#alert-complete-cost");
+              const type = modal.querySelector("#alert-complete-type");
+              const content = modal.querySelector("#alert-complete-content");
+              const formatMoney = (value) => {
+                const digits = value.replace(/[^\d]/g, "");
+                return digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".") : "";
+              };
+              const open = (button) => {
+                plate.value = button.dataset.plate || "";
+                date.min = button.dataset.plannedDate || "";
+                date.value = "{{ today }}";
+                type.value = button.dataset.planType || "periodic";
+                content.value = button.dataset.content || "";
+                cost.value = "";
+                modal.hidden = false;
+                requestAnimationFrame(() => modal.classList.add("open"));
+              };
+              const close = () => {
+                modal.classList.remove("open");
+                modal.hidden = true;
+              };
+              document.querySelectorAll("[data-alert-complete-open]").forEach((button) => button.addEventListener("click", () => open(button)));
+              modal.querySelectorAll("[data-alert-complete-close]").forEach((button) => button.addEventListener("click", close));
+              modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+              document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });
+              cost.addEventListener("input", () => {
+                cost.value = formatMoney(cost.value);
+                cost.setSelectionRange(cost.value.length, cost.value.length);
+              });
+            })();
+          </script>
+        {% endif %}
+        """,
+        alerts=alerts,
+        can_manage_data=can_manage_data(),
+        today=now_vn().strftime("%Y-%m-%d"),
+    )
+    return page(content, title="Kế hoạch dự kiến chưa cập nhật", active="alerts")
+
+
+def render_vehicle_detail_workspace(data, selected, center_filter=CENTER_FILTER_ALL):
+    vehicles = data.get("xe", pd.DataFrame())
+    car_view = vehicles[vehicles["Biển số"].astype(str) == selected] if not vehicles.empty else pd.DataFrame()
+    car = car_view.iloc[0].to_dict() if not car_view.empty else {}
+    labels = plate_label_map(vehicles)
+    history = data.get("history", pd.DataFrame())
+    history_view = history[history["Biển số"].astype(str) == selected].copy() if not history.empty else pd.DataFrame()
+    history_rows = build_history_rows(history_view)
+    periodic_rows = [row for row in history_rows if row["cost_type"] == COST_TYPE_PERIODIC]
+    repair_rows = [row for row in history_rows if row["cost_type"] == COST_TYPE_REPAIR]
+    oil_rows = build_oil_rows(data.get("oil", pd.DataFrame()), selected)
+    registration_rows = build_registration_rows(data.get("registration", pd.DataFrame()), selected)
+    schedule = maintenance_schedule(history, selected)
+    latest_registration = registration_rows[0] if registration_rows else None
+    registry_state = due_state(f"{latest_registration['due_month_raw']}-01") if latest_registration else due_state("")
+    total_cost = sum(parse_money_value(row.get("cost_raw")) for row in history_rows)
+    total_cost += sum(parse_money_value(row.get("cost_raw")) for row in oil_rows)
+    total_cost += sum(parse_money_value(row.get("cost_raw")) for row in registration_rows)
+    vehicle_options = []
+    for plate in sorted(safe_unique(vehicles, "Biển số")):
+        vehicle_options.append({"plate": plate, "label": labels.get(plate, plate)})
+    selected_label = labels.get(selected, selected)
+    content = render_template_string(
+        r"""
+        <style>
+          .public-detail { display:grid; gap:16px; }
+          .public-vehicle-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+          .public-vehicle-item { padding:12px; border:1px solid #c8d9e6; border-radius:10px; background:#fbfdff; }
+          .public-vehicle-item small { display:block; color:#5d7288; margin-bottom:5px; }
+          .public-vehicle-item strong { color:#09233f; font-size:16px; }
+          .public-data-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; align-items:stretch; }
+          .public-data-zone { display:grid; align-content:start; gap:12px; padding:16px; border:1px solid #c8d9e6; border-radius:12px; border-top:5px solid #0b75bb; background:#fff; min-width:0; }
+          .public-data-zone.periodic { border-top-color:#0b75bb; }
+          .public-data-zone.repair { border-top-color:#b86b78; }
+          .public-data-zone.registration { border-top-color:#159957; }
+          .public-data-zone.oil { border-top-color:#b89a62; }
+          .public-data-zone-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+          .public-data-zone-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+          .public-data-zone-head h2 { margin:0 0 4px; font-size:19px; }
+          .public-data-zone-head p { margin:0; color:#5d7288; font-size:13px; line-height:1.4; }
+          .public-data-zone-badge { flex:0 0 auto; padding:6px 9px; border-radius:999px; background:#edf5fb; color:#075f99; font-size:12px; font-weight:800; white-space:nowrap; }
+          .public-data-zone.repair .public-data-zone-badge { background:#f7e9eb; color:#9b5862; }
+          .public-data-zone.registration .public-data-zone-badge { background:#eaf3ee; color:#4f7f68; }
+          .public-data-zone.oil .public-data-zone-badge { background:#f6f0e3; color:#846f42; }
+          .public-schedule-values { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+          .public-schedule-value { padding:10px; border:1px solid #d7e3ee; border-radius:9px; background:#fbfdff; }
+          .public-schedule-value small { display:block; color:#5d7288; margin-bottom:4px; }
+          .public-schedule-value strong { color:#09233f; font-size:16px; }
+          .public-schedule-value.full { grid-column:1/-1; }
+          .public-record-heading { margin-top:2px; color:#315d82; font-size:13px; font-weight:800; }
+          .public-record-table { width:100%; border-collapse:collapse; min-width:520px; font-size:13px; }
+          .public-record-table th, .public-record-table td { padding:9px; border-bottom:1px solid #e2ebf3; text-align:left; vertical-align:top; }
+          .public-record-table th { color:#315d82; background:#f1f6fb; }
+          .public-record-table-wrap { overflow:auto; max-height:300px; border:1px solid #d6e2ee; border-radius:8px; }
+          .public-month { cursor:help; border-bottom:1px dotted #55718e; }
+          .public-vehicle-picker { display:grid; gap:6px; align-items:stretch; min-width:min(420px, 100%); }
+          .public-vehicle-picker .combo { width:100%; min-width:360px; }
+          .public-vehicle-picker .combo-empty { padding:10px 12px; color:#55718e; font-size:13px; }
+          @media (max-width:900px) { .public-vehicle-grid,.public-data-grid { grid-template-columns:1fr; } }
+          @media (max-width:620px) { .public-schedule-values { grid-template-columns:1fr; } .public-vehicle-picker { min-width:0; width:100%; } .public-vehicle-picker .combo { min-width:0; } }
+        </style>
+        <section class="hero">
+          <div><h1>Chi tiết xe</h1></div>
+          <div class="toolbar public-vehicle-picker">
+            <label for="public-plate-search">Chọn xe</label>
+            <div class="combo" id="public-plate-combo">
+              <input id="public-plate-search" value="{{ selected_label }}" placeholder="Tìm biển số hoặc loại xe" autocomplete="off" aria-controls="public-plate-options">
+              <button class="combo-toggle" type="button" aria-label="Mở danh sách xe">▼</button>
+              <div class="combo-menu" id="public-plate-options">
+                {% for option in vehicle_options %}<button class="combo-option" type="button" data-label="{{ option.label }}" data-url="{{ url_for('detail', plate=option.plate, center=center_filter) }}">{{ option.label }}</button>{% endfor %}
+                <div class="combo-empty" hidden>Không tìm thấy xe phù hợp.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <script>
+          (() => {
+            const combo = document.getElementById("public-plate-combo");
+            const search = document.getElementById("public-plate-search");
+            const toggle = combo?.querySelector(".combo-toggle");
+            const options = Array.from(document.querySelectorAll("#public-plate-options .combo-option"));
+            const empty = combo?.querySelector(".combo-empty");
+            if (!combo || !search || !toggle) return;
+            const committedLabel = search.value;
+            const openMenu = () => combo.classList.add("open");
+            const closeMenu = () => combo.classList.remove("open");
+            const filterOptions = (query = "") => {
+              const normalized = query.trim().toLowerCase();
+              let visible = 0;
+              options.forEach((option) => {
+                const matches = !normalized || option.dataset.label.toLowerCase().includes(normalized);
+                option.hidden = !matches;
+                if (matches) visible += 1;
+              });
+              if (empty) empty.hidden = visible > 0;
+            };
+            const restore = () => {
+              search.value = committedLabel;
+              filterOptions("");
+              closeMenu();
+            };
+            toggle.addEventListener("click", () => {
+              if (combo.classList.contains("open")) restore();
+              else { filterOptions(""); openMenu(); search.focus(); }
+            });
+            search.addEventListener("focus", () => { search.select(); filterOptions(""); openMenu(); });
+            search.addEventListener("input", () => { filterOptions(search.value); openMenu(); });
+            options.forEach((option) => option.addEventListener("click", () => { window.location.href = option.dataset.url; }));
+            search.addEventListener("keydown", (event) => { if (event.key === "Escape") restore(); });
+            document.addEventListener("click", (event) => { if (!combo.contains(event.target)) restore(); });
+          })();
+        </script>
+        <section class="panel public-detail">
+          <div class="section-head"><div><h2>{{ selected }}</h2><p class="subtle">{{ car.get('Loại xe', 'Chưa cập nhật') }}</p></div><div class="toolbar"><a class="btn" href="{{ url_for('detail', center=center_filter) }}">Quay lại danh sách xe</a></div></div>
+          <div class="public-vehicle-grid"><div class="public-vehicle-item"><small>Loại xe</small><strong>{{ car.get('Loại xe', 'Chưa cập nhật') }}</strong></div><div class="public-vehicle-item"><small>Năm sản xuất</small><strong>{{ car.get('Năm sản xuất', 'Chưa cập nhật') }}</strong></div><div class="public-vehicle-item"><small>Trạng thái</small><strong>{{ car.get('Trạng thái', 'Chưa cập nhật') }}</strong></div><div class="public-vehicle-item"><small>Số lần bảo dưỡng</small><strong>{{ periodic_rows|length }}</strong></div><div class="public-vehicle-item"><small>Tổng chi phí</small><strong>{{ format_vnd(total_cost) }}</strong></div></div>
+        </section>
+        <section class="public-data-grid">
+          <article class="public-data-zone periodic">
+            <div class="public-data-zone-head">
+              <div><h2>Bảo dưỡng định kỳ</h2></div>
+              <div class="public-data-zone-actions">{% if can_manage_data %}<a class="btn primary" href="{{ url_for('admin_data', tab='maintenance', plate=selected, center=center_filter, focus='periodic') }}">Cập nhật</a>{% endif %}<span class="public-data-zone-badge">{{ periodic_rows|length }} bản ghi</span></div>
+            </div>
+            <div class="public-schedule-values">
+              <div class="public-schedule-value"><small>Lần gần nhất</small><strong>{{ schedule.latest_display }}</strong></div>
+              <div class="public-schedule-value"><small>Lịch tiếp theo</small><strong>{% if schedule.next_date %}<span class="public-month" title="Ngày dự kiến: {{ schedule.next_tooltip }}">{{ schedule.next_month }}</span>{% else %}Chưa có{% endif %}</strong></div>
+            </div>
+            <div class="public-record-heading">Lịch sử thực hiện</div>
+            <div class="public-record-table-wrap"><table class="public-record-table"><thead><tr><th>Ngày</th><th>Nội dung</th><th>Chi phí</th></tr></thead><tbody>{% for row in periodic_rows %}<tr><td>{{ row.date }}</td><td>{{ row.content|replace('\n','<br>')|safe }}</td><td>{{ row.cost }}</td></tr>{% else %}<tr><td colspan="3" class="subtle">Chưa có bản ghi.</td></tr>{% endfor %}</tbody></table></div>
+          </article>
+          <article class="public-data-zone repair">
+            <div class="public-data-zone-head">
+              <div><h2>Sửa chữa</h2></div>
+              <div class="public-data-zone-actions">{% if can_manage_data %}<a class="btn primary" href="{{ url_for('admin_data', tab='maintenance', plate=selected, center=center_filter, focus='repair') }}">Cập nhật</a>{% endif %}<span class="public-data-zone-badge">{{ repair_rows|length }} bản ghi</span></div>
+            </div>
+            <div class="public-record-heading">Lịch sử sửa chữa</div>
+            <div class="public-record-table-wrap"><table class="public-record-table"><thead><tr><th>Ngày</th><th>Nội dung</th><th>Chi phí</th></tr></thead><tbody>{% for row in repair_rows %}<tr><td>{{ row.date }}</td><td>{{ row.content|replace('\n','<br>')|safe }}</td><td>{{ row.cost }}</td></tr>{% else %}<tr><td colspan="3" class="subtle">Chưa có bản ghi.</td></tr>{% endfor %}</tbody></table></div>
+          </article>
+          <article class="public-data-zone registration">
+            <div class="public-data-zone-head">
+              <div><h2>Đăng kiểm</h2></div>
+              <div class="public-data-zone-actions">{% if can_manage_data %}<a class="btn primary" href="{{ url_for('admin_data', tab='maintenance', plate=selected, center=center_filter, focus='registration') }}">Cập nhật</a>{% endif %}<span class="public-data-zone-badge">{{ registration_rows|length }} bản ghi</span></div>
+            </div>
+            <div class="public-schedule-values">
+              <div class="public-schedule-value"><small>Ngày gần nhất</small><strong>{{ latest_registration.date if latest_registration else 'Chưa cập nhật' }}</strong></div>
+              <div class="public-schedule-value"><small>Tháng tiếp theo</small><strong>{{ latest_registration.due_month if latest_registration else 'Chưa cập nhật' }}</strong></div>
+              <div class="public-schedule-value full"><small>Trạng thái</small><strong>{{ registry_state.label }}{% if registry_state.days is not none %} · {{ status_text(registry_state) }}{% endif %}</strong></div>
+            </div>
+            <div class="public-record-heading">Lịch sử đăng kiểm</div>
+            <div class="public-record-table-wrap"><table class="public-record-table"><thead><tr><th>Ngày</th><th>Tháng tiếp theo</th><th>Chi phí</th></tr></thead><tbody>{% for row in registration_rows %}<tr><td>{{ row.date }}</td><td>{{ row.due_month }}</td><td>{{ row.cost }}</td></tr>{% else %}<tr><td colspan="3" class="subtle">Chưa có bản ghi.</td></tr>{% endfor %}</tbody></table></div>
+          </article>
+          <article class="public-data-zone oil">
+            <div class="public-data-zone-head">
+              <div><h2>Thay dầu</h2></div>
+              <div class="public-data-zone-actions">{% if can_manage_data %}<a class="btn primary" href="{{ url_for('admin_data', tab='maintenance', plate=selected, center=center_filter, focus='oil') }}">Cập nhật</a>{% endif %}<span class="public-data-zone-badge">{{ oil_rows|length }} bản ghi</span></div>
+            </div>
+            <div class="public-record-heading">Lịch sử thay dầu</div>
+            <div class="public-record-table-wrap"><table class="public-record-table"><thead><tr><th>Ngày</th><th>Km thay dầu</th><th>Khoảng cách</th><th>Chi phí</th></tr></thead><tbody>{% for row in oil_rows %}<tr><td>{{ row.date }}</td><td>{{ row.odometer }}</td><td>{{ row.distance }}</td><td>{{ row.cost }}</td></tr>{% else %}<tr><td colspan="4" class="subtle">Chưa có bản ghi.</td></tr>{% endfor %}</tbody></table></div>
+          </article>
+        </section>
+        """,
+        selected=selected,
+        vehicle_options=vehicle_options,
+        selected_label=selected_label,
+        center_filter=center_filter,
+        car=car,
+        periodic_rows=periodic_rows,
+        repair_rows=repair_rows,
+        oil_rows=oil_rows,
+        registration_rows=registration_rows,
+        schedule=schedule,
+        latest_registration=latest_registration,
+        registry_state=registry_state,
+        total_cost=total_cost,
+        format_vnd=format_vnd,
+        status_text=status_text,
+        can_manage_data=can_manage_data(),
+    )
+    return page(content, title="Chi tiết xe", active="detail")
+
+
 @app.route("/detail")
 @login_required
 def detail():
-    data = load_data(["xe", "history", "next"])
+    data = load_data(["xe", "history", "next", "oil", "registration"])
+    if can_manage_data():
+        default_center = current_center_scope() if is_area_admin() else CENTER_FILTER_ALL
+        center_filter = normalize_center_filter(request.args.get("center") or default_center)
+        data["xe"] = center_filtered_vehicle_df(scoped_vehicle_df(data["xe"]), center_filter)
+    else:
+        center_filter = CENTER_FILTER_ALL
     plates = allowed_plates(data)
     if not plates:
         content = """
@@ -4820,10 +7583,174 @@ def detail():
         """
         return page(content)
 
+    requested_plate = request.args.get("plate", "").strip()
+    if not requested_plate and can_manage_data():
+        detail_query = request.args.get("q", "").strip()
+        detail_rows = dashboard_rows(data, plates)
+        if detail_query:
+            normalized_query = detail_query.lower()
+            detail_rows = [
+                row
+                for row in detail_rows
+                if normalized_query in str(row["plate"]).lower()
+                or normalized_query in str(row["car_type"]).lower()
+            ]
+        detail_page_sizes = [10, 20, 50]
+        try:
+            detail_per_page = int(request.args.get("detail_per_page", 10))
+        except ValueError:
+            detail_per_page = 10
+        if detail_per_page not in detail_page_sizes:
+            detail_per_page = 10
+        try:
+            detail_page = int(request.args.get("detail_page", 1))
+        except ValueError:
+            detail_page = 1
+        detail_total_pages = max(1, (len(detail_rows) + detail_per_page - 1) // detail_per_page)
+        detail_page = min(max(1, detail_page), detail_total_pages)
+        detail_start = (detail_page - 1) * detail_per_page
+        detail_end = min(detail_start + detail_per_page, len(detail_rows))
+        detail_page_rows = detail_rows[detail_start:detail_end]
+        detail_pagination_pages = pagination_items(detail_page, detail_total_pages)
+        content = render_template_string(
+            r"""
+            <section class="hero">
+              <div>
+                <h1>Danh sách xe</h1>
+              </div>
+              {% if root_admin %}
+                <div class="toolbar center-filter-toolbar">
+                  {% for center_code, center_label in center_filters.items() %}
+                    <a class="btn {{ 'primary active' if center_filter == center_code else '' }}" href="{{ url_for('detail', center=center_code, detail_per_page=detail_per_page, q=detail_query) }}">{{ center_label }}</a>
+                  {% endfor %}
+                  <span class="badge">{{ detail_list_total }} xe</span>
+                </div>
+              {% else %}
+                <div class="toolbar">
+                  <span class="badge">{{ center_filter_label }} · {{ detail_list_total }} xe</span>
+                </div>
+              {% endif %}
+            </section>
+
+            <section class="panel">
+              <div class="section-head">
+                <div>
+                  <h2>Danh sách xe</h2>
+                  <p class="subtle" style="margin:3px 0 0">Bấm “Xem chi tiết” ở từng dòng để mở hồ sơ của xe.</p>
+                </div>
+              </div>
+              <div class="dashboard-list-controls">
+                <form class="dashboard-list-search" method="get">
+                  <input type="hidden" name="center" value="{{ center_filter }}">
+                  <input type="hidden" name="detail_per_page" value="{{ detail_per_page }}">
+                  <input type="hidden" name="detail_page" value="1">
+                  <div class="vehicle-search">
+                    <input id="detail-q" name="q" value="{{ detail_query }}" placeholder="Tìm biển số hoặc loại xe">
+                  </div>
+                  {% if detail_query %}
+                    <a class="btn" href="{{ url_for('detail', center=center_filter, detail_per_page=detail_per_page) }}">Xóa lọc</a>
+                  {% endif %}
+                </form>
+                <span class="subtle">
+                  Hiển thị {{ detail_start + 1 if detail_list_total else 0 }}-{{ detail_end }} / {{ detail_list_total }} xe
+                </span>
+                <form class="dashboard-list-size" method="get">
+                  <input type="hidden" name="center" value="{{ center_filter }}">
+                  <input type="hidden" name="q" value="{{ detail_query }}">
+                  <input type="hidden" name="detail_page" value="1">
+                  <label for="detail-per-page">Số xe/trang</label>
+                  <select class="cost-select" id="detail-per-page" name="detail_per_page">
+                    {% for size in detail_page_sizes %}
+                      <option value="{{ size }}" {{ "selected" if size == detail_per_page else "" }}>{{ size }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+              </div>
+              {% if detail_page_rows %}
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Biển số</th>
+                        <th>Loại xe</th>
+                        <th>Đăng kiểm</th>
+                        <th>Bảo dưỡng</th>
+                        <th>Lịch sử</th>
+                        <th>Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for row in detail_page_rows %}
+                        <tr>
+                          <td data-label="Biển số"><a class="code" href="{{ url_for('detail', plate=row.plate, center=center_filter) }}">{{ row.plate }}</a></td>
+                          <td data-label="Loại xe">{{ row.car_type }}</td>
+                          <td data-label="Đăng kiểm">
+                            <span class="due-pill {{ row.registry.key }}">{{ row.registry.label }}</span>
+                            <div class="subtle">{{ row.registry.date }}</div>
+                          </td>
+                          <td data-label="Bảo dưỡng">
+                            <span class="due-pill {{ row.maintenance.key }}">{{ row.maintenance.label }}</span>
+                            <div class="subtle">{{ row.maintenance.date }}</div>
+                          </td>
+                          <td data-label="Lịch sử">{{ row.history_count }} lần</td>
+                          <td data-label="Thao tác"><a class="btn primary" href="{{ url_for('detail', plate=row.plate, center=center_filter) }}">Xem chi tiết</a></td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {% else %}
+                <div class="empty">Không tìm thấy xe phù hợp.</div>
+              {% endif %}
+              {% if detail_total_pages > 1 %}
+                <div class="pagination">
+                  <span class="subtle">Trang {{ detail_page }}/{{ detail_total_pages }}</span>
+                  <div class="pagination-pages">
+                    <a class="btn {{ 'disabled' if detail_page <= 1 else '' }}" href="{{ url_for('detail', center=center_filter, detail_per_page=detail_per_page, detail_page=1, q=detail_query) }}">&laquo; Đầu</a>
+                    <a class="btn {{ 'disabled' if detail_page <= 1 else '' }}" href="{{ url_for('detail', center=center_filter, detail_per_page=detail_per_page, detail_page=detail_page - 1, q=detail_query) }}">&lsaquo; Trước</a>
+                    {% for p in detail_pagination_pages %}
+                      {% if p == 'ellipsis' %}
+                        <span class="pagination-ellipsis" aria-hidden="true">&hellip;</span>
+                      {% else %}
+                        <a class="btn {{ 'active' if p == detail_page else '' }}" href="{{ url_for('detail', center=center_filter, detail_per_page=detail_per_page, detail_page=p, q=detail_query) }}">{{ p }}</a>
+                      {% endif %}
+                    {% endfor %}
+                    <a class="btn {{ 'disabled' if detail_page >= detail_total_pages else '' }}" href="{{ url_for('detail', center=center_filter, detail_per_page=detail_per_page, detail_page=detail_page + 1, q=detail_query) }}">Sau &rsaquo;</a>
+                    <a class="btn {{ 'disabled' if detail_page >= detail_total_pages else '' }}" href="{{ url_for('detail', center=center_filter, detail_per_page=detail_per_page, detail_page=detail_total_pages, q=detail_query) }}">Cuối &raquo;</a>
+                  </div>
+                </div>
+              {% endif %}
+            </section>
+            <script>
+              (() => {
+                const select = document.getElementById("detail-per-page");
+                select?.addEventListener("change", () => select.form?.submit());
+              })();
+            </script>
+            """,
+            detail_page_rows=detail_page_rows,
+            detail_page_sizes=detail_page_sizes,
+            detail_per_page=detail_per_page,
+            detail_page=detail_page,
+            detail_total_pages=detail_total_pages,
+            detail_pagination_pages=detail_pagination_pages,
+            detail_start=detail_start,
+            detail_end=detail_end,
+            detail_list_total=len(detail_rows),
+            detail_query=detail_query,
+            root_admin=is_admin(),
+            center_filter=center_filter,
+            center_filter_label=CENTER_FILTER_LABELS.get(center_filter, CENTER_FILTER_LABELS[CENTER_FILTER_ALL]),
+            center_filters=CENTER_FILTER_LABELS,
+        )
+        return page(content, title="Danh sách xe", active="detail")
+
     selected = request.args.get("plate") or session.get("selected_plate") or plates[0]
     if selected not in plates:
         selected = plates[0]
     session["selected_plate"] = selected
+
+    return render_vehicle_detail_workspace(data, selected, center_filter)
 
     df_xe = data["xe"]
     df_history = data["history"]
@@ -4855,12 +7782,20 @@ def detail():
                 history_view = history_view[history_view["_date_filter"] <= date_to + timedelta(days=1)]
             history_view = history_view.drop(columns=["_date_filter"], errors="ignore")
     history_rows = build_history_rows(history_view)
+    latest_service_date = latest_maintenance_date(
+        df_history,
+        selected,
+        next_item.get("Lịch bảo dưỡng gần nhất", ""),
+    )
     repair_count = len([row for row in history_rows if row.get("cost_type") == COST_TYPE_REPAIR])
     periodic_count = len([row for row in history_rows if row.get("cost_type") == COST_TYPE_PERIODIC])
     total_cost = sum(float(row["cost_raw"]) for row in history_rows)
     alerts = due_alerts(next_item) if next_item else []
     maintenance_state = due_state(next_item.get("Dự kiến lần tiếp theo")) if next_item else due_state("")
     registry_state = due_state(next_item.get("Hạn đăng kiểm đến")) if next_item else due_state("")
+    plan_due_date = parse_due_date(next_item.get("Dự kiến lần tiếp theo")) if next_item else None
+    plan_actionable = bool(plan_due_date and plan_due_date.date() <= now_vn().date())
+    plan_type = normalize_plan_type(next_item.get("LoaiKeHoach", PLAN_TYPE_PERIODIC))
     schedule_logs = build_next_service_logs(selected)
 
     content = render_template_string(
@@ -4958,90 +7893,33 @@ def detail():
         </script>
         {% if can_manage_history %}
         <script>
-          document.addEventListener("DOMContentLoaded", () => {
-            const modal = document.getElementById("next-service-modal");
-            if (!modal) return;
-            const openButtons = document.querySelectorAll("[data-next-modal-open]");
-            const editButtons = document.querySelectorAll("[data-next-log-edit]");
-            const closeButtons = modal.querySelectorAll("[data-next-modal-close]");
-            const title = modal.querySelector("[data-next-modal-title]");
-            const actionInput = modal.querySelector("#next-modal-action");
-            const recordIdInput = modal.querySelector("#next-modal-record-id");
-            const submitButton = modal.querySelector("#next-modal-submit");
-            const lastServiceInput = modal.querySelector("#modal-last-service");
-            const nextDueInput = modal.querySelector("#modal-next-due");
-            const registryDateInput = modal.querySelector("#modal-registry-date");
-            const registryDueInput = modal.querySelector("#modal-registry-due");
-            const suggestionInput = modal.querySelector("#modal-suggestion");
-            const oilCostInput = modal.querySelector("#modal-oil-cost");
-            const registryCostInput = modal.querySelector("#modal-registry-cost");
-
-            const defaults = {
-              title: "Thêm lịch bảo dưỡng và đăng kiểm",
-              submit: "Thêm bản ghi",
-              action: "save_next",
-              recordId: "",
-              lastService: "",
-              nextDue: "",
-              registryDate: "",
-              registryDue: "",
-              suggestion: "",
-              oilCost: "",
-              registryCost: "",
+          (() => {
+            const initPlanModals = () => {
+              const bindModal = (modalId, openSelector) => {
+                const modal = document.getElementById(modalId);
+                if (!modal) return;
+                const open = () => {
+                  modal.hidden = false;
+                  requestAnimationFrame(() => modal.classList.add("open"));
+                };
+                const close = () => {
+                  modal.classList.remove("open");
+                  modal.hidden = true;
+                };
+                document.querySelectorAll(openSelector).forEach((button) => button.addEventListener("click", open));
+                modal.querySelectorAll("[data-modal-close]").forEach((button) => button.addEventListener("click", close));
+                modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+                document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });
+              };
+              bindModal("maintenance-plan-modal", "[data-plan-modal-open]");
+              bindModal("maintenance-complete-modal", "[data-plan-complete-open]");
             };
-
-            const open = () => {
-              modal.hidden = false;
-              requestAnimationFrame(() => modal.classList.add("open"));
-            };
-            const close = () => {
-              modal.classList.remove("open");
-              modal.hidden = true;
-            };
-            const setValue = (input, value) => {
-              if (input) input.value = value ?? "";
-            };
-            const resetToAddMode = () => {
-              if (title) title.textContent = defaults.title;
-              if (submitButton) submitButton.textContent = defaults.submit;
-              if (actionInput) actionInput.value = defaults.action;
-              if (recordIdInput) recordIdInput.value = defaults.recordId;
-              setValue(lastServiceInput, defaults.lastService);
-              setValue(nextDueInput, defaults.nextDue);
-              setValue(registryDateInput, defaults.registryDate);
-              setValue(registryDueInput, defaults.registryDue);
-              setValue(suggestionInput, defaults.suggestion);
-              setValue(oilCostInput, defaults.oilCost);
-              setValue(registryCostInput, defaults.registryCost);
-            };
-            const openForAdd = () => {
-              resetToAddMode();
-              open();
-            };
-            openButtons.forEach((button) => button.addEventListener("click", openForAdd));
-            editButtons.forEach((button) => button.addEventListener("click", () => {
-              resetToAddMode();
-              if (title) title.textContent = `Sửa lịch kế hoạch #${button.dataset.logId || ""}`;
-              if (submitButton) submitButton.textContent = "Lưu thay đổi";
-              if (actionInput) actionInput.value = "update_next_log";
-              if (recordIdInput) recordIdInput.value = button.dataset.logId || "";
-              setValue(lastServiceInput, button.dataset.lastService || "");
-              setValue(nextDueInput, button.dataset.nextDue || "");
-              setValue(registryDateInput, button.dataset.registryDate || "");
-              setValue(registryDueInput, button.dataset.registryDue || "");
-              setValue(suggestionInput, button.dataset.suggestion || "");
-              setValue(oilCostInput, button.dataset.oilCost || "");
-              setValue(registryCostInput, button.dataset.registryCost || "");
-              open();
-            }));
-            closeButtons.forEach((button) => button.addEventListener("click", close));
-            modal.addEventListener("click", (event) => {
-              if (event.target === modal) close();
-            });
-            document.addEventListener("keydown", (event) => {
-              if (event.key === "Escape" && !modal.hidden) close();
-            });
-          });
+            if (document.readyState === "loading") {
+              document.addEventListener("DOMContentLoaded", initPlanModals);
+            } else {
+              initPlanModals();
+            }
+          })();
         </script>
         {% endif %}
 
@@ -5092,21 +7970,139 @@ def detail():
 
           <div class="plan-board">
             <div class="section-head">
-              <h2>Lịch bảo dưỡng và đăng kiểm</h2>
-              <div class="toolbar">
+              <div>
+                <h2>Kế hoạch và đăng kiểm</h2>
+                <p class="subtle" style="margin:3px 0 0">Chọn đúng thao tác bên dưới theo tình trạng của xe.</p>
+              </div>
+            </div>
+            <div class="workflow-guide">
+              <div class="workflow-action ready">
+                <span class="workflow-number">1</span>
+                <div class="workflow-copy">
+                  <strong>Kế hoạch dự kiến</strong>
+                  <span>Nhập ngày và nội dung, chưa nhập tiền.</span>
+                </div>
                 {% if can_manage_history %}
-                  <button class="btn primary" type="button" data-next-modal-open>Thêm</button>
+                  {% if plan_actionable %}
+                    <span class="badge">Đã lập</span>
+                  {% else %}
+                    <button class="btn primary" type="button" data-plan-modal-open>{{ 'Sửa kế hoạch' if next_item.get('Dự kiến lần tiếp theo') else 'Lập kế hoạch' }}</button>
+                  {% endif %}
+                {% endif %}
+              </div>
+              <div class="workflow-action {{ 'attention' if plan_actionable else 'muted' }}">
+                <span class="workflow-number">2</span>
+                <div class="workflow-copy">
+                  <strong>Cập nhật thực hiện</strong>
+                  <span>{{ 'Đã đến hạn: nhập ngày, nội dung và số tiền.' if plan_actionable else 'Chỉ mở khi kế hoạch đến ngày.' }}</span>
+                </div>
+                {% if can_manage_history and plan_actionable %}
+                  <button class="btn primary" type="button" data-plan-complete-open>Cập nhật</button>
+                {% else %}
+                  <span class="badge">{{ status_text(maintenance_state) }}</span>
+                {% endif %}
+              </div>
+              <div class="workflow-action ready">
+                <span class="workflow-number">3</span>
+                <div class="workflow-copy">
+                  <strong>Ngoài kế hoạch</strong>
+                  <span>Dùng khi phát sinh thực tế không có kế hoạch.</span>
+                </div>
+                {% if can_manage_history %}
+                  <button class="btn" type="button" data-history-add>Thêm bản ghi</button>
                 {% endif %}
               </div>
             </div>
+            <div class="workflow-cards">
+              <article class="workflow-card plan-card">
+                <div class="workflow-card-head">
+                  <div>
+                    <h3>Kế hoạch bảo dưỡng dự kiến</h3>
+                    <p>Chỉ là dự kiến cho xe, chưa phải chi phí thực tế.</p>
+                  </div>
+                  {% if plan_actionable %}
+                    <span class="badge workflow-status">{{ status_text(maintenance_state) }}</span>
+                  {% elif next_item.get('Dự kiến lần tiếp theo') %}
+                    <span class="badge workflow-status">{{ status_text(maintenance_state) }}</span>
+                  {% endif %}
+                </div>
+                {% if next_item.get('Dự kiến lần tiếp theo') %}
+                  <div class="workflow-data">
+                    <div class="workflow-data-item"><span>Ngày dự kiến</span><strong>{{ format_short_date(next_item.get('Dự kiến lần tiếp theo')) }}</strong></div>
+                    <div class="workflow-data-item"><span>Loại</span><strong>{{ plan_type_label }}</strong></div>
+                    <div class="workflow-data-item full"><span>Nội dung dự kiến</span><strong>{{ next_item.get('Gợi ý nội dung') or 'Chưa nhập nội dung' }}</strong></div>
+                  </div>
+                  <div class="workflow-note">Chi phí chỉ nhập ở bước 2 sau khi đến ngày dự kiến.</div>
+                {% else %}
+                  <div class="workflow-empty">Xe chưa có kế hoạch dự kiến. Nếu muốn lập kế hoạch, bấm “Lập kế hoạch” ở bước 1 để nhập ngày và nội dung.</div>
+                  {% if latest_service_date %}<div class="workflow-note">Lần thực hiện gần nhất: <strong>{{ format_short_date(latest_service_date) }}</strong></div>{% endif %}
+                {% endif %}
+              </article>
+              <article class="workflow-card registry-card" id="registry-summary">
+                <div class="workflow-card-head">
+                  <div>
+                    <h3>Đăng kiểm</h3>
+                    <p>Theo dõi ngày đăng kiểm và hạn còn hiệu lực.</p>
+                  </div>
+                  {% if registry_state.key != 'missing' %}<span class="badge workflow-status">{{ status_text(registry_state) }}</span>{% endif %}
+                </div>
+                <div class="workflow-data">
+                  <div class="workflow-data-item"><span>Ngày đăng kiểm</span><strong>{{ format_short_date(next_item.get('Ngày đăng kiểm')) }}</strong></div>
+                  <div class="workflow-data-item"><span>Hạn đăng kiểm đến</span><strong>{{ format_short_date(next_item.get('Hạn đăng kiểm đến')) }}</strong></div>
+                  <div class="workflow-data-item full"><span>Chi phí đăng kiểm</span><strong>{{ registry_cost }}</strong></div>
+                </div>
+                {% if can_manage_history %}<div class="workflow-card-actions"><a class="btn" href="{{ url_for('admin_data', tab='maintenance', plate=selected) }}#registration-form">Cập nhật đăng kiểm</a></div>{% endif %}
+              </article>
+            </div>
+            {% if schedule_logs %}
+              <details class="workflow-history">
+                <summary>Xem lịch sử cập nhật kế hoạch ({{ schedule_logs|length }} lần)</summary>
+                <div class="schedule-log-list">
+                  {% for log in schedule_logs %}
+                    <div class="schedule-log-row">
+                      <div><strong>{{ log.saved_at }}</strong><span>{{ format_short_date(log.next_due) }}</span></div>
+                      <div><strong>{{ log.plan_type_label }}</strong><span>Kế hoạch dự kiến</span></div>
+                      <div class="schedule-log-note">{{ log.suggestion }}</div>
+                      {% if can_manage_history %}
+                        <div class="schedule-log-actions">
+                          <button
+                            class="btn"
+                            type="button"
+                            data-next-log-edit
+                            data-record-id="{{ log.id }}"
+                            data-last-service="{{ log.last_service_raw }}"
+                            data-next-due="{{ log.next_due_raw }}"
+                            data-suggestion="{{ log.suggestion_raw }}"
+                            data-plan-type="{{ log.plan_type_raw }}"
+                            data-registry-date="{{ log.registry_date_raw }}"
+                            data-registry-due="{{ log.registry_due_raw }}"
+                            data-oil-cost="{{ log.oil_cost_raw }}"
+                            data-registry-cost="{{ log.registry_cost_raw }}"
+                          >Sửa</button>
+                          <form method="post" action="{{ url_for('admin_data') }}" onsubmit="return confirm('Xóa dòng lịch kế hoạch này?')">
+                            <input type="hidden" name="action" value="delete_next_log">
+                            <input type="hidden" name="plate" value="{{ selected }}">
+                            <input type="hidden" name="record_id" value="{{ log.id }}">
+                            <input type="hidden" name="return_to" value="lookup">
+                            <input type="hidden" name="return_plate" value="{{ selected }}">
+                            <button class="btn danger" type="submit">Xóa</button>
+                          </form>
+                        </div>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                </div>
+              </details>
+            {% endif %}
+            <div class="legacy-plan-content">
             {% if next_item %}
                 <div class="plan-timeline">
                   <div class="plan-step periodic">
                     <span>Lịch bảo dưỡng gần nhất</span>
-                    <strong>{{ format_short_date(next_item.get("Lịch bảo dưỡng gần nhất")) }}</strong>
+                    <strong>{{ format_short_date(latest_service_date) }}</strong>
                   </div>
                   <div class="plan-step {{ maintenance_state.key }}">
-                    <span>Lịch bảo dưỡng tiếp theo</span>
+                    <span>Kế hoạch bảo dưỡng dự kiến</span>
                     <strong>{{ format_short_date(next_item.get("Dự kiến lần tiếp theo")) }}</strong>
                     <small>{{ status_text(maintenance_state) }}</small>
                   </div>
@@ -5123,17 +8119,17 @@ def detail():
               <div class="plan-detail-grid">
                 <div class="plan-note">
                   <span>Nội dung</span>
-                  <strong>{{ next_item.get("Gợi ý nội dung") or "Chưa cập nhật" }}</strong>
+                  <strong>{{ next_item.get("Gợi ý nội dung") or "Chưa có kế hoạch" }}</strong>
                 </div>
                 <div class="plan-costs">
-                  <div class="plan-cost oil"><span>Chi phí thay dầu</span><strong>{{ oil_cost }}</strong></div>
+                  <div class="plan-cost oil"><span>Loại kế hoạch</span><strong>{{ plan_type_label }}</strong></div>
                   <div class="plan-cost registry"><span>Chi phí đăng kiểm</span><strong>{{ registry_cost }}</strong></div>
                 </div>
               </div>
               {% if schedule_logs %}
                 <div class="schedule-log-box">
                   <div class="section-head">
-                    <h3>Lịch sử kế hoạch</h3>
+                    <h3>Lịch sử cập nhật kế hoạch</h3>
                     <span class="badge">{{ schedule_logs|length }} bản gần nhất</span>
                   </div>
                   <div class="schedule-log-list">
@@ -5144,36 +8140,10 @@ def detail():
                           <span>{{ format_short_date(log.last_service) }} → {{ format_short_date(log.next_due) }}</span>
                         </div>
                         <div>
-                          <strong>{{ log.oil_cost }}</strong>
-                          <span>{{ log.registry_cost }}</span>
+                          <strong>{{ log.plan_type_label }}</strong>
+                          <span>Kế hoạch dự kiến</span>
                         </div>
                         <div class="schedule-log-note">{{ log.suggestion }}</div>
-                        <div class="schedule-log-actions">
-                          {% if can_manage_history %}
-                            <button
-                              class="btn primary"
-                              type="button"
-                              data-next-log-edit
-                              data-log-id="{{ log.id }}"
-                              data-last-service="{{ log.last_service_raw }}"
-                              data-next-due="{{ log.next_due_raw }}"
-                              data-suggestion="{{ log.suggestion_raw }}"
-                              data-registry-date="{{ log.registry_date_raw }}"
-                              data-registry-due="{{ log.registry_due_raw }}"
-                              data-oil-cost="{{ log.oil_cost_raw }}"
-                              data-registry-cost="{{ log.registry_cost_raw }}"
-                              data-saved-at="{{ log.saved_at }}"
-                            >Sửa</button>
-                            <form method="post" action="{{ url_for('admin_data') }}" onsubmit="return confirm('Xóa dòng lịch kế hoạch này?')">
-                              <input type="hidden" name="action" value="delete_next_log">
-                              <input type="hidden" name="plate" value="{{ selected }}">
-                              <input type="hidden" name="record_id" value="{{ log.id }}">
-                              <input type="hidden" name="return_to" value="lookup">
-                              <input type="hidden" name="return_plate" value="{{ selected }}">
-                              <button class="btn danger" type="submit">Xóa</button>
-                            </form>
-                          {% endif %}
-                        </div>
                       </div>
                     {% endfor %}
                   </div>
@@ -5182,78 +8152,188 @@ def detail():
             {% else %}
               <div class="empty">Chưa có lịch bảo dưỡng tiếp theo.</div>
             {% endif %}
+            </div>
           </div>
         </section>
 
         {% if can_manage_history %}
-          <div class="inline-modal-backdrop" id="next-service-modal" hidden>
-            <div class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="next-service-modal-title">
+          <div class="inline-modal-backdrop" id="maintenance-plan-modal" hidden>
+            <div class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="maintenance-plan-modal-title">
               <div class="inline-modal-head">
-                <h3 id="next-service-modal-title" data-next-modal-title>Thêm lịch bảo dưỡng và đăng kiểm</h3>
-                <button class="dashboard-modal-close" type="button" data-next-modal-close aria-label="Đóng">×</button>
+                <h3 id="maintenance-plan-modal-title">Kế hoạch bảo dưỡng dự kiến</h3>
+                <button class="dashboard-modal-close" type="button" data-modal-close aria-label="Đóng">×</button>
               </div>
               <div class="inline-modal-body">
                 <form method="post" action="{{ url_for('admin_data') }}">
-                  <input type="hidden" name="action" value="save_next" id="next-modal-action">
-                  <input type="hidden" name="record_id" value="" id="next-modal-record-id">
+                  <input type="hidden" name="action" value="save_plan">
                   <input type="hidden" name="plate" value="{{ selected }}">
                   <input type="hidden" name="return_to" value="lookup">
                   <input type="hidden" name="return_plate" value="{{ selected }}">
                   <div class="inline-modal-grid">
                     <div class="form-row">
                       <div class="field">
-                        <label for="modal-last-service">Lịch bảo dưỡng gần nhất</label>
-                        <input id="modal-last-service" name="last_service" type="date" value="{{ date_input_value(next_item.get('Lịch bảo dưỡng gần nhất', '')) }}">
+                        <label for="plan-modal-date">Ngày dự kiến</label>
+                        <input id="plan-modal-date" name="planned_date" type="date" min="{{ tomorrow }}" value="{{ date_input_value(next_item.get('Dự kiến lần tiếp theo', '')) }}" required>
                       </div>
                       <div class="field">
-                        <label for="modal-next-due">Dự kiến lần tiếp theo</label>
-                        <input id="modal-next-due" name="next_due" type="date" value="{{ date_input_value(next_item.get('Dự kiến lần tiếp theo', '')) }}">
-                      </div>
-                    </div>
-                    <div class="form-row">
-                      <div class="field">
-                        <label for="modal-registry-date">Ngày đăng kiểm</label>
-                        <input id="modal-registry-date" name="registry_date" type="date" value="{{ date_input_value(next_item.get('Ngày đăng kiểm', today)) if next_item.get('Ngày đăng kiểm') else today }}">
-                      </div>
-                      <div class="field">
-                        <label for="modal-registry-due">Hạn đăng kiểm đến</label>
-                        <input id="modal-registry-due" name="registry_due" type="date" value="{{ date_input_value(next_item.get('Hạn đăng kiểm đến', '')) }}">
+                        <label for="plan-modal-type">Loại kế hoạch</label>
+                        <select id="plan-modal-type" name="plan_type">
+                          <option value="periodic" {{ 'selected' if plan_type == 'periodic' else '' }}>Bảo dưỡng định kỳ</option>
+                          <option value="repair" {{ 'selected' if plan_type == 'repair' else '' }}>Sửa chữa</option>
+                        </select>
                       </div>
                     </div>
                     <div class="field">
-                      <label for="modal-suggestion">Gợi ý nội dung</label>
-                      <textarea id="modal-suggestion" name="suggestion" placeholder="VD: thay dầu, kiểm tra phanh...">{{ next_item.get('Gợi ý nội dung', '') }}</textarea>
+                      <label for="plan-modal-content">Nội dung dự kiến</label>
+                      <textarea id="plan-modal-content" name="content" placeholder="VD: thay dầu, kiểm tra phanh..." required>{{ next_item.get('Gợi ý nội dung', '') if next_item.get('Dự kiến lần tiếp theo') else '' }}</textarea>
                     </div>
-                    <div class="form-row">
-                      <div class="field">
-                        <label for="modal-oil-cost">Chi phí thay dầu</label>
-                        <input id="modal-oil-cost" class="money-input" name="oil_cost" value="{{ format_money_input(next_item.get('Chi phí thay dầu', '')) }}" inputmode="numeric" autocomplete="off" placeholder="VD: 1.500.000" pattern="[0-9]+([.][0-9]{3})*" title="Vui lòng nhập số tiền, ví dụ 1.500.000" required>
-                      </div>
-                      <div class="field">
-                        <label for="modal-registry-cost">Chi phí đăng kiểm</label>
-                        <input id="modal-registry-cost" class="money-input" name="registry_cost" value="{{ format_money_input(next_item.get('Chi phí đăng kiểm', '')) }}" inputmode="numeric" autocomplete="off" placeholder="VD: 2.500.000" pattern="[0-9]+([.][0-9]{3})*" title="Vui lòng nhập số tiền, ví dụ 2.500.000" required>
-                      </div>
-                    </div>
+                    <div class="subtle">Chưa đến ngày dự kiến, biểu mẫu này không có trường số tiền.</div>
                     <div class="inline-modal-actions">
-                      <button class="btn" type="button" data-next-modal-close>Hủy</button>
-                      <button class="btn primary" type="submit" id="next-modal-submit">Lưu lịch tiếp theo</button>
+                      <button class="btn" type="button" data-modal-close>Hủy</button>
+                      <button class="btn primary" type="submit">Lưu kế hoạch</button>
                     </div>
                   </div>
                 </form>
               </div>
             </div>
           </div>
+          <div class="inline-modal-backdrop" id="maintenance-complete-modal" hidden>
+            <div class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="maintenance-complete-modal-title">
+              <div class="inline-modal-head">
+                <h3 id="maintenance-complete-modal-title">Cập nhật thực hiện kế hoạch</h3>
+                <button class="dashboard-modal-close" type="button" data-modal-close aria-label="Đóng">×</button>
+              </div>
+              <div class="inline-modal-body">
+                <form method="post" action="{{ url_for('admin_data') }}">
+                  <input type="hidden" name="action" value="complete_plan">
+                  <input type="hidden" name="plate" value="{{ selected }}">
+                  <input type="hidden" name="return_to" value="lookup">
+                  <input type="hidden" name="return_plate" value="{{ selected }}">
+                  <div class="inline-modal-grid">
+                    <div class="form-row">
+                      <div class="field">
+                        <label class="required-field" for="complete-modal-date">Ngày thực hiện <span class="required-mark" aria-hidden="true">*</span></label>
+                        <input id="complete-modal-date" class="required-input" name="actual_date" type="date" min="{{ date_input_value(next_item.get('Dự kiến lần tiếp theo', '')) }}" max="{{ today }}" value="{{ today }}" required>
+                      </div>
+                      <div class="field">
+                        <label class="required-field" for="complete-modal-cost">Số tiền thực tế <span class="required-mark" aria-hidden="true">*</span></label>
+                        <input id="complete-modal-cost" class="money-input required-input" name="cost" inputmode="numeric" autocomplete="off" placeholder="VD: 1.500.000" required>
+                      </div>
+                    </div>
+                    <div class="required-hint">* Bắt buộc nhập. Ngày thực hiện đang mặc định là hôm nay, có thể thay đổi nếu cần.</div>
+                    <div class="field">
+                      <label for="complete-modal-type">Loại thực hiện</label>
+                      <select id="complete-modal-type" name="cost_type">
+                        <option value="{{ PLAN_TYPE_PERIODIC }}" {{ 'selected' if plan_type == PLAN_TYPE_PERIODIC else '' }}>Bảo dưỡng định kỳ</option>
+                        <option value="{{ PLAN_TYPE_REPAIR }}" {{ 'selected' if plan_type == PLAN_TYPE_REPAIR else '' }}>Sửa chữa</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label for="complete-modal-content">Nội dung thực tế</label>
+                      <textarea id="complete-modal-content" name="content" required>{{ next_item.get('Gợi ý nội dung', '') }}</textarea>
+                    </div>
+                    <div class="inline-modal-actions">
+                      <button class="btn" type="button" data-modal-close>Hủy</button>
+                      <button class="btn primary" type="submit">Cập nhật đã thực hiện</button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+          <div class="inline-modal-backdrop" id="next-log-modal" hidden>
+            <div class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="next-log-modal-title">
+              <div class="inline-modal-head">
+                <h3 id="next-log-modal-title">Sửa dòng lịch kế hoạch</h3>
+                <button class="dashboard-modal-close" type="button" data-next-log-close aria-label="Đóng">×</button>
+              </div>
+              <div class="inline-modal-body">
+                <form method="post" action="{{ url_for('admin_data') }}" id="next-log-form">
+                  <input type="hidden" name="action" value="update_next_log">
+                  <input type="hidden" name="plate" value="{{ selected }}">
+                  <input type="hidden" name="record_id" id="next-log-record-id">
+                  <input type="hidden" name="return_to" value="lookup">
+                  <input type="hidden" name="return_plate" value="{{ selected }}">
+                  <input type="hidden" name="last_service" id="next-log-last-service">
+                  <input type="hidden" name="registry_date" id="next-log-registry-date">
+                  <input type="hidden" name="registry_due" id="next-log-registry-due">
+                  <input type="hidden" name="oil_cost" id="next-log-oil-cost">
+                  <input type="hidden" name="registry_cost" id="next-log-registry-cost">
+                  <div class="inline-modal-grid">
+                    <div class="form-row">
+                      <div class="field">
+                        <label for="next-log-date">Ngày dự kiến</label>
+                        <input id="next-log-date" name="next_due" type="date" required>
+                      </div>
+                      <div class="field">
+                        <label for="next-log-plan-type">Loại kế hoạch</label>
+                        <select id="next-log-plan-type" name="plan_type">
+                          <option value="periodic">Bảo dưỡng định kỳ</option>
+                          <option value="repair">Sửa chữa</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label for="next-log-suggestion">Nội dung dự kiến</label>
+                      <textarea id="next-log-suggestion" name="suggestion" required></textarea>
+                    </div>
+                    <div class="subtle">Đây là dữ liệu lịch sử của kế hoạch. Sửa hoặc xóa dòng này không thay đổi kế hoạch hiện tại của xe.</div>
+                    <div class="inline-modal-actions">
+                      <button class="btn" type="button" data-next-log-close>Hủy</button>
+                      <button class="btn primary" type="submit">Lưu thay đổi</button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+          <script>
+            (() => {
+              const modal = document.getElementById("next-log-modal");
+              if (!modal) return;
+              const recordId = modal.querySelector("#next-log-record-id");
+              const lastService = modal.querySelector("#next-log-last-service");
+              const nextDue = modal.querySelector("#next-log-date");
+              const planType = modal.querySelector("#next-log-plan-type");
+              const suggestion = modal.querySelector("#next-log-suggestion");
+              const registryDate = modal.querySelector("#next-log-registry-date");
+              const registryDue = modal.querySelector("#next-log-registry-due");
+              const oilCost = modal.querySelector("#next-log-oil-cost");
+              const registryCost = modal.querySelector("#next-log-registry-cost");
+              const open = (button) => {
+                recordId.value = button.dataset.recordId || "";
+                lastService.value = button.dataset.lastService || "";
+                nextDue.value = button.dataset.nextDue || "";
+                planType.value = button.dataset.planType || "periodic";
+                suggestion.value = button.dataset.suggestion || "";
+                registryDate.value = button.dataset.registryDate || "";
+                registryDue.value = button.dataset.registryDue || "";
+                oilCost.value = button.dataset.oilCost || "";
+                registryCost.value = button.dataset.registryCost || "";
+                modal.hidden = false;
+                requestAnimationFrame(() => modal.classList.add("open"));
+              };
+              const close = () => {
+                modal.classList.remove("open");
+                modal.hidden = true;
+              };
+              document.querySelectorAll("[data-next-log-edit]").forEach((button) => button.addEventListener("click", () => open(button)));
+              modal.querySelectorAll("[data-next-log-close]").forEach((button) => button.addEventListener("click", close));
+              modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+              document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });
+            })();
+          </script>
         {% endif %}
 
         <section class="panel" style="margin-top:12px">
           <div class="section-head">
             <div>
               <h2>Lịch sử bảo dưỡng</h2>
-              <p class="subtle">Danh sách các lần bảo dưỡng đã ghi nhận</p>
+                <p class="subtle">Các lần đã thực hiện và đã phát sinh chi phí. Không có kế hoạch vẫn nhập ở đây.</p>
             </div>
             <div class="toolbar">
               {% if can_manage_history %}
-                <button class="btn" type="button" data-history-add>Thêm mới</button>
+                <button class="btn" type="button" data-history-add>Thêm bản ghi</button>
               {% endif %}
               <a class="btn primary" href="{{ url_for('export_excel', plate=selected) }}">Xuất Excel</a>
               <span class="badge">{{ history_rows|length }} bản ghi</span>
@@ -5315,7 +8395,7 @@ def detail():
           <div class="inline-modal-backdrop" id="history-record-modal" hidden>
             <div class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="history-record-modal-title">
               <div class="inline-modal-head">
-                <h3 id="history-record-modal-title" data-history-modal-title>Sửa lịch sử bảo dưỡng</h3>
+                <h3 id="history-record-modal-title" data-history-modal-title>Sửa bản ghi đã thực hiện</h3>
                 <button class="dashboard-modal-close" type="button" data-history-modal-close aria-label="Đóng">×</button>
               </div>
               <div class="inline-modal-body">
@@ -5326,6 +8406,7 @@ def detail():
                   <input type="hidden" name="return_to" value="lookup">
                   <input type="hidden" name="return_plate" value="{{ selected }}">
                   <div class="inline-modal-grid">
+                    <div class="subtle">Dùng biểu mẫu này cho công việc đã thực hiện nhưng không có kế hoạch dự kiến.</div>
                     <div class="form-row">
                       <div class="field">
                         <label for="history-modal-date">Ngày</label>
@@ -5345,7 +8426,7 @@ def detail():
                     </div>
                     <div class="field">
                       <label for="history-modal-content">Nội dung</label>
-                      <textarea id="history-modal-content" name="content" placeholder="Nhập nội dung bảo dưỡng" required></textarea>
+                      <textarea id="history-modal-content" name="content" placeholder="Nhập nội dung bảo dưỡng hoặc sửa chữa" required></textarea>
                     </div>
                     <div class="inline-modal-actions">
                       <button class="btn" type="button" data-history-modal-close>Hủy</button>
@@ -5368,7 +8449,7 @@ def detail():
               const typeInput = modal.querySelector("#history-modal-type");
               const contentInput = modal.querySelector("#history-modal-content");
               const submitButton = modal.querySelector("#history-modal-submit");
-              const addButton = document.querySelector("[data-history-add]");
+              const addButtons = document.querySelectorAll("[data-history-add]");
               const editButtons = document.querySelectorAll("[data-history-edit]");
               const closeButtons = modal.querySelectorAll("[data-history-modal-close]");
               const cleanMoney = (value) => String(value || "").replace(/[^\d]/g, "");
@@ -5385,7 +8466,7 @@ def detail():
                 modal.hidden = true;
               };
               const openForAdd = () => {
-                if (title) title.textContent = "Thêm lịch sử bảo dưỡng";
+                if (title) title.textContent = "Thêm bản ghi ngoài kế hoạch";
                 if (actionInput) actionInput.value = "add_history";
                 if (recordIdInput) recordIdInput.value = "";
                 if (dateInput) dateInput.value = "{{ today }}";
@@ -5408,7 +8489,7 @@ def detail():
                   open();
                 });
               });
-              if (addButton) addButton.addEventListener("click", openForAdd);
+              addButtons.forEach((button) => button.addEventListener("click", openForAdd));
               costInput.addEventListener("input", () => {
                 const formatted = formatMoney(costInput.value);
                 costInput.value = formatted;
@@ -5431,8 +8512,16 @@ def detail():
         car=car,
         year=normalize_year(car.get("Năm sản xuất")),
         next_item=next_item,
+        latest_service_date=latest_service_date,
         maintenance_state=maintenance_state,
+        plan_actionable=plan_actionable,
         registry_state=registry_state,
+        plan_type=plan_type,
+        plan_type_label=plan_type_label(plan_type),
+        PLAN_TYPE_PERIODIC=PLAN_TYPE_PERIODIC,
+        PLAN_TYPE_REPAIR=PLAN_TYPE_REPAIR,
+        today=now_vn().strftime("%Y-%m-%d"),
+        tomorrow=(now_vn().date() + timedelta(days=1)).isoformat(),
         status_text=status_text,
         format_short_date=format_short_date,
         oil_cost=format_vnd(next_item.get("Chi phí thay dầu")),
@@ -5446,7 +8535,7 @@ def detail():
         date_from_raw=date_from_raw,
         date_to_raw=date_to_raw,
         alerts=alerts,
-        can_manage_history=is_admin(),
+        can_manage_history=can_manage_data(),
         date_input_value=date_input_value,
         format_money_input=format_money_input,
     )
@@ -5458,11 +8547,531 @@ def lookup_legacy():
     return redirect(url_for("detail"))
 
 
+def render_maintenance_workspace(data, selected, center_filter, focus=""):
+    history = data.get("history", pd.DataFrame())
+    oil = data.get("oil", pd.DataFrame())
+    registration = data.get("registration", pd.DataFrame())
+    history_view = history[history["Biển số"].astype(str) == selected].copy() if not history.empty else pd.DataFrame()
+    history_rows = build_history_rows(history_view)
+    periodic_rows = [row for row in history_rows if row["cost_type"] == COST_TYPE_PERIODIC]
+    repair_rows = [row for row in history_rows if row["cost_type"] == COST_TYPE_REPAIR]
+    oil_rows = build_oil_rows(oil, selected)
+    registration_rows = build_registration_rows(registration, selected)
+    schedule = maintenance_schedule(history, selected)
+    focus = normalize_maintenance_focus(focus)
+    focus_label = MAINTENANCE_FOCUS_LABELS.get(focus, "")
+
+    def selected_row(rows, key):
+        value = request.args.get(key, "").strip()
+        return next((row for row in rows if str(row.get("id", "")) == value), None)
+
+    periodic_edit = selected_row(periodic_rows, "periodic_id")
+    repair_edit = selected_row(repair_rows, "repair_id")
+    oil_edit = selected_row(oil_rows, "oil_id")
+    registration_edit = selected_row(registration_rows, "registration_id")
+    vehicle_options = []
+    for _, row in data.get("xe", pd.DataFrame()).iterrows():
+        plate = normalize_plate(row.get("Biển số"))
+        if plate:
+            vehicle_options.append({"plate": plate, "label": plate_label_map(data["xe"]).get(plate, plate)})
+    vehicle_options.sort(key=lambda item: item["plate"])
+    selected_label = next((item["label"] for item in vehicle_options if item["plate"] == selected), selected)
+    car_view = data.get("xe", pd.DataFrame())
+    car_rows = car_view[car_view["Biển số"].astype(str) == selected] if not car_view.empty else pd.DataFrame()
+    car = car_rows.iloc[0].to_dict() if not car_rows.empty else {}
+    periodic_form = {"date_raw": "", "content_raw": "", "cost_input": ""}
+    repair_form = {"date_raw": "", "content_raw": "", "cost_input": ""}
+    oil_form = {"date_raw": "", "odometer_raw": "", "previous_odometer_raw": "", "cost_raw": ""}
+    registration_form = {"date_raw": "", "due_month_raw": "", "cost_raw": ""}
+    return_to = url_for("admin_data", tab="maintenance", plate=selected, center=center_filter)
+
+    content = render_template_string(
+        r"""
+        <style>
+          .maintenance-workspace { display:grid; gap:18px; }
+          .maintenance-toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+          .maintenance-toolbar select { min-width:280px; }
+          .maintenance-toolbar .combo { min-width:360px; }
+          .maintenance-toolbar .combo-empty, .public-vehicle-picker .combo-empty { padding:10px 12px; color:#55718e; font-size:13px; }
+          .maintenance-summary { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; }
+          .maintenance-summary .summary-item { padding:14px 16px; border:1px solid #c8d9eb; border-radius:12px; background:#f8fbfe; }
+          .maintenance-summary .summary-item small { display:block; color:#55718e; margin-bottom:5px; }
+          .maintenance-summary .summary-item strong { color:#003b70; font-size:20px; }
+          .maintenance-record-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:18px; align-items:start; }
+          .maintenance-record-grid.focused { grid-template-columns:minmax(0, 1fr); }
+          .maintenance-record-grid > .maintenance-card { min-width:0; }
+          .maintenance-focus-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 16px; padding:11px 14px; border:1px solid #b8d3e9; border-radius:9px; background:#eef6fc; color:#164f7d; }
+          .maintenance-focus-bar strong { font-size:14px; }
+          .maintenance-card { display:flex; flex-direction:column; border:1px solid #b8cde2; border-top:4px solid #006fba; border-radius:12px; background:#fff; padding:18px; min-width:0; }
+          .maintenance-card.periodic { border-top-color:#168c58; }
+          .maintenance-card.repair { border-top-color:#d23a51; }
+          .maintenance-card.oil { border-top-color:#bc7b00; }
+          .maintenance-card.registration { border-top-color:#1677b9; }
+          .maintenance-card h2 { margin:0; color:#003b70; font-size:20px; }
+          .maintenance-card .card-help { margin:4px 0 15px; color:#55718e; font-size:13px; }
+          .maintenance-card-kicker { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:0 0 13px; padding:8px 10px; border-radius:9px; background:#f3f7fb; color:#55718e; font-size:12px; }
+          .maintenance-card-kicker .card-kicker-label { color:#165888; font-weight:600; }
+          .maintenance-card.periodic .maintenance-card-kicker { background:#edf8f2; }
+          .maintenance-card.periodic .maintenance-card-kicker .card-kicker-label { color:#147a4b; }
+          .maintenance-card.repair .maintenance-card-kicker { background:#fff2f4; }
+          .maintenance-card.repair .maintenance-card-kicker .card-kicker-label { color:#b52d49; }
+          .maintenance-card.oil .maintenance-card-kicker { background:#fff8e9; }
+          .maintenance-card.oil .maintenance-card-kicker .card-kicker-label { color:#9a6400; }
+          .maintenance-card.registration .maintenance-card-kicker { background:#eef6fc; }
+          .maintenance-card.registration .maintenance-card-kicker .card-kicker-label { color:#176b9f; }
+          .maintenance-card form.record-form { display:grid; gap:11px; }
+          .maintenance-card .form-row { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+          .maintenance-card textarea { min-height:76px; resize:vertical; }
+          .maintenance-card .form-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+          .maintenance-card .form-actions .btn { margin-top:0; }
+          .record-summary { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
+          .record-summary .summary-chip { border-radius:9px; background:#eaf3fb; padding:9px 12px; color:#164d79; }
+          .record-summary .summary-chip strong { display:block; color:#003b70; font-size:17px; }
+          .record-summary .summary-chip small { display:block; color:#55718e; }
+          .record-upload { margin:13px 0 15px; padding:12px; border:1px dashed #aac3da; border-radius:10px; background:#f8fbfe; }
+          .record-upload form { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+          .record-upload input[type=file] { min-width:220px; max-width:100%; }
+          .record-table-wrap { flex:0 0 auto; overflow-x:auto; overflow-y:visible; max-height:none; min-height:0; margin-top:14px; border:1px solid #d6e2ee; border-radius:9px; }
+          .record-table { width:100%; border-collapse:collapse; min-width:620px; font-size:13px; }
+          .record-table th, .record-table td { padding:9px 10px; border-bottom:1px solid #e2ebf3; vertical-align:top; text-align:left; }
+          .record-table th { position:sticky; top:0; z-index:1; background:#f1f6fb; color:#315d82; }
+          .record-table tr:last-child td { border-bottom:0; }
+          .record-table .record-actions { white-space:nowrap; }
+          .record-table .record-actions form { display:inline; }
+          .record-table .record-actions .btn { padding:6px 9px; font-size:12px; }
+          .record-table .record-actions .btn.primary { color:#fff; }
+          .record-table .record-actions .btn.danger { color:#ba1837; background:#fff; }
+          .registration-edit-notice { display:none; }
+          .registration-edit-modal .inline-modal { width:min(620px, 100%); }
+          .maintenance-record-edit-modal .inline-modal { width:min(700px, 100%); }
+          .maintenance-record-edit-modal .edit-kind-note { margin:0; padding:9px 11px; border-radius:8px; background:#f1f6fb; color:#55718e; font-size:13px; }
+          .required-label { color:#ba1837 !important; }
+          .required-label::after { content:" *"; }
+          .month-display { cursor:help; border-bottom:1px dotted #55718e; }
+          @media (max-width: 980px) {
+            .maintenance-summary { grid-template-columns:1fr; }
+            .maintenance-record-grid { grid-template-columns:1fr; }
+          }
+          @media (max-width: 620px) {
+            .maintenance-card .form-row { grid-template-columns:1fr; }
+            .maintenance-toolbar .combo { min-width:0; width:100%; }
+          }
+        </style>
+        <section class="hero">
+          <div>
+            <h1>Quản lý bảo dưỡng và chi phí</h1>
+          </div>
+          <div class="maintenance-toolbar">
+            <label for="maintenance-plate-search">Chọn xe</label>
+            <div class="combo" id="maintenance-plate-combo">
+              <input id="maintenance-plate-search" value="{{ selected_label }}" placeholder="Tìm biển số hoặc loại xe" autocomplete="off" aria-controls="maintenance-plate-options">
+              <button class="combo-toggle" type="button" aria-label="Mở danh sách xe">▼</button>
+              <div class="combo-menu" id="maintenance-plate-options">
+                {% for option in vehicle_options %}<button class="combo-option" type="button" data-label="{{ option.label }}" data-url="{{ url_for('admin_data', tab='maintenance', plate=option.plate, center=center_filter, focus=focus) }}">{{ option.label }}</button>{% endfor %}
+                <div class="combo-empty" hidden>Không tìm thấy xe phù hợp.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <script>
+          (() => {
+            const combo = document.getElementById("maintenance-plate-combo");
+            const search = document.getElementById("maintenance-plate-search");
+            const toggle = combo?.querySelector(".combo-toggle");
+            const options = Array.from(document.querySelectorAll("#maintenance-plate-options .combo-option"));
+            const empty = combo?.querySelector(".combo-empty");
+            if (!combo || !search || !toggle) return;
+            const committedLabel = search.value;
+            const openMenu = () => combo.classList.add("open");
+            const closeMenu = () => combo.classList.remove("open");
+            const filterOptions = (query = "") => {
+              const normalized = query.trim().toLowerCase();
+              let visible = 0;
+              options.forEach((option) => {
+                const matches = !normalized || option.dataset.label.toLowerCase().includes(normalized);
+                option.hidden = !matches;
+                if (matches) visible += 1;
+              });
+              if (empty) empty.hidden = visible > 0;
+            };
+            const restore = () => {
+              search.value = committedLabel;
+              filterOptions("");
+              closeMenu();
+            };
+            toggle.addEventListener("click", () => {
+              if (combo.classList.contains("open")) restore();
+              else { filterOptions(""); openMenu(); search.focus(); }
+            });
+            search.addEventListener("focus", () => { search.select(); filterOptions(""); openMenu(); });
+            search.addEventListener("input", () => { filterOptions(search.value); openMenu(); });
+            options.forEach((option) => option.addEventListener("click", () => { window.location.href = option.dataset.url; }));
+            search.addEventListener("keydown", (event) => { if (event.key === "Escape") restore(); });
+            document.addEventListener("click", (event) => { if (!combo.contains(event.target)) restore(); });
+          })();
+        </script>
+        <section class="panel maintenance-workspace">
+          <div class="section-head">
+            <div>
+              <h2>Xe {{ selected }}</h2>
+              <p class="subtle">{{ car.get('Loại xe', 'Chưa cập nhật') }}{% if car.get('TrungTam') %} · {{ center_filter_label }}{% endif %}</p>
+            </div>
+            <a class="btn" href="{{ url_for('detail', center=center_filter) }}">Về danh sách xe</a>
+          </div>
+          <div class="maintenance-summary">
+            <div class="summary-item"><small>Bảo dưỡng gần nhất</small><strong>{{ schedule.latest_display }}</strong></div>
+            <div class="summary-item"><small>Bảo dưỡng tiếp theo</small><strong>{% if schedule.next_date %}<span class="month-display" title="Ngày dự kiến: {{ schedule.next_tooltip }}">{{ schedule.next_month }}</span>{% else %}Chưa có{% endif %}</strong></div>
+            <div class="summary-item"><small>Số bản ghi sửa chữa</small><strong>{{ repair_rows|length }}</strong></div>
+            <div class="summary-item"><small>Số bản ghi thay dầu</small><strong>{{ oil_rows|length }}</strong></div>
+          </div>
+        </section>
+        {% if focus %}<div class="maintenance-focus-bar"><strong>Đang cập nhật: {{ focus_label }}</strong><a class="btn" href="{{ url_for('admin_data', tab='maintenance', plate=selected, center=center_filter) }}">Hiển thị cả 4 mục</a></div>{% endif %}
+        <section class="maintenance-record-grid{{ ' focused' if focus else '' }}">
+          {% if not focus or focus == 'periodic' %}
+          <article id="maintenance-periodic" class="maintenance-card periodic">
+            <div class="maintenance-card-kicker"><span class="card-kicker-label">Lịch tự động theo năm</span><span>{{ periodic_rows|length }} bản ghi</span></div>
+            <h2>Bảo dưỡng định kỳ</h2>
+            <form class="record-form" method="post" action="{{ url_for('admin_data') }}">
+              <input type="hidden" name="action" value="add_periodic">
+              <input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><input type="hidden" name="focus" value="{{ focus }}"><input type="hidden" name="record_id" value="">
+              <div class="form-row">
+                <div class="field"><label for="periodic-date">Ngày bảo dưỡng</label><input id="periodic-date" type="date" name="service_date" value="{{ periodic_form.date_raw }}" required></div>
+                <div class="field"><label for="periodic-cost">Chi phí</label><input id="periodic-cost" name="cost" value="{{ periodic_form.cost_input }}" placeholder="VD: 1.500.000" inputmode="numeric"></div>
+              </div>
+              <div class="field"><label for="periodic-content">Nội dung bảo dưỡng</label><textarea id="periodic-content" name="content" required>{{ periodic_form.content_raw }}</textarea></div>
+              <div class="form-actions"><button class="btn primary" type="submit">Thêm bảo dưỡng</button></div>
+            </form>
+            <div class="record-table-wrap"><table class="record-table"><thead><tr><th>Ngày</th><th>Nội dung</th><th>Chi phí</th><th></th></tr></thead><tbody>
+              {% for row in periodic_rows %}<tr><td>{{ row.date }}</td><td>{{ row.content|replace('\n', '<br>')|safe }}</td><td>{{ row.cost }}</td><td class="record-actions"><button class="btn" type="button" data-maintenance-edit-open data-edit-kind="periodic" data-record-id="{{ row.id }}" data-record-date="{{ row.date_raw }}" data-record-cost="{{ row.cost_input }}" data-record-content="{{ row.content_raw }}">Sửa</button><form method="post" action="{{ url_for('admin_data') }}" onsubmit="return confirm('Xóa bản ghi bảo dưỡng này?')"><input type="hidden" name="action" value="delete_history"><input type="hidden" name="record_id" value="{{ row.id }}"><input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><button class="btn" type="submit">Xóa</button></form></td></tr>{% else %}<tr><td colspan="4" class="subtle">Chưa có lịch sử bảo dưỡng.</td></tr>{% endfor %}
+            </tbody></table></div>
+          </article>
+          {% endif %}
+          {% if not focus or focus == 'repair' %}
+          <article id="maintenance-repair" class="maintenance-card repair">
+            <div class="maintenance-card-kicker"><span class="card-kicker-label">Không tạo lịch</span><span>{{ repair_rows|length }} bản ghi</span></div>
+            <h2>Sửa chữa</h2>
+            <form class="record-form" method="post" action="{{ url_for('admin_data') }}">
+              <input type="hidden" name="action" value="add_repair"><input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><input type="hidden" name="focus" value="{{ focus }}"><input type="hidden" name="record_id" value="">
+              <div class="form-row"><div class="field"><label for="repair-date">Ngày sửa chữa</label><input id="repair-date" type="date" name="service_date" value="{{ repair_form.date_raw }}" required></div><div class="field"><label for="repair-cost">Số tiền</label><input id="repair-cost" name="cost" value="{{ repair_form.cost_input }}" placeholder="VD: 5.000.000" inputmode="numeric" required></div></div>
+              <div class="field"><label for="repair-content">Nội dung sửa chữa</label><textarea id="repair-content" name="content" required>{{ repair_form.content_raw }}</textarea></div>
+              <div class="form-actions"><button class="btn primary" type="submit">Thêm sửa chữa</button></div>
+            </form>
+            <div class="record-upload"><div class="subtle">Nhập nhiều bản ghi</div><form method="post" action="{{ url_for('admin_data') }}" enctype="multipart/form-data"><input type="hidden" name="action" value="import_repairs"><input type="hidden" name="focus" value="{{ focus }}"><input type="hidden" name="center" value="{{ center_filter }}"><input type="hidden" name="plate" value="{{ selected }}"><input type="file" name="file" accept=".xlsx,.xls" required><a class="btn" href="{{ url_for('maintenance_template', kind='repair') }}">Tải mẫu Excel</a><button class="btn primary" type="submit">Nhập Excel</button></form></div>
+            <div class="record-table-wrap"><table class="record-table"><thead><tr><th>Ngày</th><th>Nội dung</th><th>Số tiền</th><th></th></tr></thead><tbody>
+              {% for row in repair_rows %}<tr><td>{{ row.date }}</td><td>{{ row.content|replace('\n', '<br>')|safe }}</td><td>{{ row.cost }}</td><td class="record-actions"><button class="btn" type="button" data-maintenance-edit-open data-edit-kind="repair" data-record-id="{{ row.id }}" data-record-date="{{ row.date_raw }}" data-record-cost="{{ row.cost_input }}" data-record-content="{{ row.content_raw }}">Sửa</button><form method="post" action="{{ url_for('admin_data') }}" onsubmit="return confirm('Xóa bản ghi sửa chữa này?')"><input type="hidden" name="action" value="delete_history"><input type="hidden" name="record_id" value="{{ row.id }}"><input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><button class="btn" type="submit">Xóa</button></form></td></tr>{% else %}<tr><td colspan="4" class="subtle">Chưa có lịch sử sửa chữa.</td></tr>{% endfor %}
+            </tbody></table></div>
+          </article>
+          {% endif %}
+          {% if not focus or focus == 'oil' %}
+          <article id="maintenance-oil" class="maintenance-card oil">
+            <div class="maintenance-card-kicker"><span class="card-kicker-label">Theo dõi quãng đường</span><span>{{ oil_rows|length }} bản ghi</span></div>
+            <h2>Thay dầu</h2>
+            <form class="record-form" method="post" action="{{ url_for('admin_data') }}">
+              <input type="hidden" name="action" value="add_oil"><input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><input type="hidden" name="focus" value="{{ focus }}"><input type="hidden" name="record_id" value="">
+              <div class="form-row"><div class="field"><label for="oil-date">Ngày thay dầu</label><input id="oil-date" type="date" name="oil_date" value="{{ oil_form.date_raw }}" required></div><div class="field"><label for="oil-cost">Chi phí thay dầu</label><input id="oil-cost" name="cost" value="{{ oil_form.cost_raw }}" placeholder="VD: 800.000" inputmode="numeric" required></div></div>
+              <div class="form-row"><div class="field"><label for="oil-odometer">Số km khi thay dầu</label><input id="oil-odometer" name="odometer" value="{{ oil_form.odometer_raw }}" placeholder="VD: 125000" inputmode="numeric" required></div><div class="field"><label for="oil-previous">Số km trước{% if not oil_rows %} *{% endif %}</label><input id="oil-previous" name="previous_odometer" value="{{ oil_form.previous_odometer_raw }}" placeholder="Bắt buộc ở lần đầu" inputmode="numeric"{% if oil_rows %} title="Để trống để tự lấy số km của lần thay dầu gần nhất"{% endif %}></div></div>
+              <div class="form-actions"><button class="btn primary" type="submit">Thêm thay dầu</button></div>
+            </form>
+            <div class="record-upload"><div class="subtle">Nhập nhiều bản ghi</div><form method="post" action="{{ url_for('admin_data') }}" enctype="multipart/form-data"><input type="hidden" name="action" value="import_oil"><input type="hidden" name="focus" value="{{ focus }}"><input type="hidden" name="center" value="{{ center_filter }}"><input type="hidden" name="plate" value="{{ selected }}"><input type="file" name="file" accept=".xlsx,.xls" required><a class="btn" href="{{ url_for('maintenance_template', kind='oil') }}">Tải mẫu Excel</a><button class="btn primary" type="submit">Nhập Excel</button></form></div>
+            <div class="record-table-wrap"><table class="record-table"><thead><tr><th>Ngày</th><th>Km thay dầu</th><th>Km trước</th><th>Khoảng cách</th><th>Chi phí</th><th></th></tr></thead><tbody>
+              {% for row in oil_rows %}<tr><td>{{ row.date }}</td><td>{{ row.odometer }}</td><td>{{ row.previous_odometer }}</td><td>{{ row.distance }}</td><td>{{ row.cost }}</td><td class="record-actions"><button class="btn" type="button" data-maintenance-edit-open data-edit-kind="oil" data-record-id="{{ row.id }}" data-record-date="{{ row.date_raw }}" data-record-cost="{{ row.cost_raw }}" data-record-odometer="{{ row.odometer_raw }}" data-record-previous-odometer="{{ row.previous_odometer_raw }}">Sửa</button><form method="post" action="{{ url_for('admin_data') }}" onsubmit="return confirm('Xóa bản ghi thay dầu này?')"><input type="hidden" name="action" value="delete_oil"><input type="hidden" name="record_id" value="{{ row.id }}"><input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><button class="btn" type="submit">Xóa</button></form></td></tr>{% else %}<tr><td colspan="6" class="subtle">Chưa có lịch sử thay dầu.</td></tr>{% endfor %}
+            </tbody></table></div>
+          </article>
+          {% endif %}
+          {% if not focus or focus == 'registration' %}
+          <article id="maintenance-registration" class="maintenance-card registration">
+            <div class="maintenance-card-kicker"><span class="card-kicker-label">Theo dõi theo tháng</span><span>{{ registration_rows|length }} bản ghi</span></div>
+            <h2>Đăng kiểm</h2>
+            <form id="registration-form" class="record-form" method="post" action="{{ url_for('admin_data') }}">
+              <input type="hidden" name="action" value="add_registration"><input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><input type="hidden" name="focus" value="{{ focus }}"><input type="hidden" name="record_id" value="">
+              <div class="form-row"><div class="field"><label for="registration-date">Ngày đăng kiểm</label><input id="registration-date" type="date" name="registration_date" value="{{ registration_form.date_raw }}" required></div><div class="field"><label for="registration-month">Tháng dự kiến tiếp theo</label><input id="registration-month" type="month" name="due_month" value="{{ registration_form.due_month_raw }}" required></div></div>
+              <div class="field"><label for="registration-cost">Chi phí đăng kiểm</label><input id="registration-cost" name="cost" value="{{ registration_form.cost_raw }}" placeholder="VD: 10.000.000" inputmode="numeric"></div>
+              <div class="form-actions"><button class="btn primary" type="submit">Thêm đăng kiểm</button></div>
+            </form>
+            <div class="record-table-wrap"><table class="record-table"><thead><tr><th>Ngày đăng kiểm</th><th>Dự kiến tiếp theo</th><th>Chi phí</th><th></th></tr></thead><tbody>
+              {% for row in registration_rows %}<tr><td>{{ row.date }}</td><td>{{ row.due_month }}</td><td>{{ row.cost }}</td><td class="record-actions"><button class="btn primary" type="button" data-registration-edit-open data-record-id="{{ row.id }}" data-registration-date="{{ row.date_raw }}" data-registration-month="{{ row.due_month_raw }}" data-registration-cost="{{ row.cost_raw }}" aria-label="Sửa bản ghi đăng kiểm ngày {{ row.date }}">Sửa</button><form method="post" action="{{ url_for('admin_data') }}" onsubmit="return confirm('Xóa bản ghi đăng kiểm này?')"><input type="hidden" name="action" value="delete_registration"><input type="hidden" name="record_id" value="{{ row.id }}"><input type="hidden" name="plate" value="{{ selected }}"><input type="hidden" name="center" value="{{ center_filter }}"><button class="btn danger" type="submit" aria-label="Xóa bản ghi đăng kiểm ngày {{ row.date }}">Xóa</button></form></td></tr>{% else %}<tr><td colspan="4" class="subtle">Chưa có lịch sử đăng kiểm.</td></tr>{% endfor %}
+            </tbody></table></div>
+          </article>
+          {% endif %}
+          <div class="inline-modal-backdrop registration-edit-modal" id="registration-edit-modal" hidden>
+            <section class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="registration-edit-title">
+              <div class="inline-modal-head">
+                <h3 id="registration-edit-title">Sửa bản ghi đăng kiểm</h3>
+                <button class="dashboard-modal-close" type="button" data-registration-edit-close aria-label="Đóng">×</button>
+              </div>
+              <div class="inline-modal-body">
+                <form class="inline-modal-grid" method="post" action="{{ url_for('admin_data') }}" id="registration-edit-form">
+                  <input type="hidden" name="action" value="update_registration">
+                  <input type="hidden" name="plate" value="{{ selected }}">
+                  <input type="hidden" name="center" value="{{ center_filter }}">
+                  <input type="hidden" name="focus" value="{{ focus }}">
+                  <input type="hidden" name="record_id" id="registration-edit-id">
+                  <div class="form-row">
+                    <div class="field"><label for="registration-edit-date">Ngày đăng kiểm</label><input id="registration-edit-date" type="date" name="registration_date" required></div>
+                    <div class="field"><label for="registration-edit-month">Tháng dự kiến tiếp theo</label><input id="registration-edit-month" type="month" name="due_month" required></div>
+                  </div>
+                  <div class="field"><label for="registration-edit-cost">Chi phí đăng kiểm</label><input id="registration-edit-cost" class="money-input" name="cost" inputmode="numeric" placeholder="VD: 10.000.000"></div>
+                  <div class="inline-modal-actions"><button class="btn" type="button" data-registration-edit-close>Hủy</button><button class="btn primary" type="submit">Cập nhật</button></div>
+                </form>
+              </div>
+            </section>
+          </div>
+          <script>
+            (() => {
+              const modal = document.getElementById("registration-edit-modal");
+              if (!modal) return;
+              const idInput = document.getElementById("registration-edit-id");
+              const dateInput = document.getElementById("registration-edit-date");
+              const monthInput = document.getElementById("registration-edit-month");
+              const costInput = document.getElementById("registration-edit-cost");
+              const openButtons = document.querySelectorAll("[data-registration-edit-open]");
+              const closeButtons = modal.querySelectorAll("[data-registration-edit-close]");
+              const open = (button) => {
+                idInput.value = button.dataset.recordId || "";
+                dateInput.value = button.dataset.registrationDate || "";
+                monthInput.value = button.dataset.registrationMonth || "";
+                costInput.value = button.dataset.registrationCost || "";
+                modal.hidden = false;
+                dateInput.focus();
+              };
+              const close = () => { modal.hidden = true; };
+              openButtons.forEach((button) => button.addEventListener("click", () => open(button)));
+              closeButtons.forEach((button) => button.addEventListener("click", close));
+              modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+              document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });
+              {% if registration_edit %}
+              const initial = document.querySelector("[data-registration-edit-open][data-record-id='{{ registration_edit.id }}']");
+              if (initial) open(initial);
+              {% endif %}
+            })();
+          </script>
+          <div class="inline-modal-backdrop maintenance-record-edit-modal" id="maintenance-record-edit-modal" hidden>
+            <section class="inline-modal" role="dialog" aria-modal="true" aria-labelledby="maintenance-record-edit-title">
+              <div class="inline-modal-head">
+                <h3 id="maintenance-record-edit-title">Sửa bản ghi</h3>
+                <button class="dashboard-modal-close" type="button" data-maintenance-edit-close aria-label="Đóng">×</button>
+              </div>
+              <div class="inline-modal-body">
+                <form class="inline-modal-grid" method="post" action="{{ url_for('admin_data') }}" id="maintenance-record-edit-form">
+                  <input type="hidden" name="action" id="maintenance-edit-action">
+                  <input type="hidden" name="plate" value="{{ selected }}">
+                  <input type="hidden" name="center" value="{{ center_filter }}">
+                  <input type="hidden" name="focus" value="{{ focus }}">
+                  <input type="hidden" name="record_id" id="maintenance-edit-record-id">
+                  <p class="edit-kind-note" id="maintenance-edit-note"></p>
+                  <div class="form-row">
+                    <div class="field"><label for="maintenance-edit-date" id="maintenance-edit-date-label">Ngày thực hiện</label><input id="maintenance-edit-date" type="date" name="service_date" required></div>
+                    <div class="field"><label for="maintenance-edit-cost" id="maintenance-edit-cost-label">Chi phí</label><input id="maintenance-edit-cost" name="cost" inputmode="numeric" autocomplete="off" placeholder="VD: 1.500.000"></div>
+                  </div>
+                  <div class="field" id="maintenance-edit-content-field"><label for="maintenance-edit-content" id="maintenance-edit-content-label">Nội dung</label><textarea id="maintenance-edit-content" name="content"></textarea></div>
+                  <div id="maintenance-edit-oil-fields" hidden>
+                    <div class="form-row">
+                      <div class="field"><label for="maintenance-edit-odometer">Số km khi thay dầu</label><input id="maintenance-edit-odometer" name="odometer" inputmode="numeric" placeholder="VD: 125000"></div>
+                      <div class="field"><label for="maintenance-edit-previous-odometer">Số km trước</label><input id="maintenance-edit-previous-odometer" name="previous_odometer" inputmode="numeric" placeholder="Để trống nếu không thay đổi"></div>
+                    </div>
+                  </div>
+                  <div class="inline-modal-actions"><button class="btn" type="button" data-maintenance-edit-close>Hủy</button><button class="btn primary" type="submit">Lưu thay đổi</button></div>
+                </form>
+              </div>
+            </section>
+          </div>
+          <script>
+            (() => {
+              const modal = document.getElementById("maintenance-record-edit-modal");
+              if (!modal) return;
+              const title = document.getElementById("maintenance-record-edit-title");
+              const note = document.getElementById("maintenance-edit-note");
+              const form = document.getElementById("maintenance-record-edit-form");
+              const actionInput = document.getElementById("maintenance-edit-action");
+              const recordId = document.getElementById("maintenance-edit-record-id");
+              const dateInput = document.getElementById("maintenance-edit-date");
+              const dateLabel = document.getElementById("maintenance-edit-date-label");
+              const costInput = document.getElementById("maintenance-edit-cost");
+              const costLabel = document.getElementById("maintenance-edit-cost-label");
+              const contentField = document.getElementById("maintenance-edit-content-field");
+              const contentLabel = document.getElementById("maintenance-edit-content-label");
+              const contentInput = document.getElementById("maintenance-edit-content");
+              const oilFields = document.getElementById("maintenance-edit-oil-fields");
+              const odometerInput = document.getElementById("maintenance-edit-odometer");
+              const previousOdometerInput = document.getElementById("maintenance-edit-previous-odometer");
+              const money = (value) => {
+                const digits = String(value || "").replace(/[^\d]/g, "");
+                return digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".") : "";
+              };
+              const close = () => {
+                modal.classList.remove("open");
+                modal.hidden = true;
+              };
+              const open = (button) => {
+                const kind = button.dataset.editKind || "repair";
+                const isOil = kind === "oil";
+                const isPeriodic = kind === "periodic";
+                const labels = isOil
+                  ? { title: "Sửa bản ghi thay dầu", note: "Cập nhật ngày, số km và chi phí thay dầu.", date: "Ngày thay dầu", cost: "Chi phí thay dầu", content: "Nội dung thay dầu" }
+                  : isPeriodic
+                    ? { title: "Sửa bản ghi bảo dưỡng", note: "Cập nhật lần bảo dưỡng đã thực hiện. Lịch tiếp theo sẽ được tính lại theo ngày này.", date: "Ngày bảo dưỡng", cost: "Chi phí", content: "Nội dung bảo dưỡng" }
+                    : { title: "Sửa bản ghi sửa chữa", note: "Cập nhật ngày, số tiền và nội dung sửa chữa.", date: "Ngày sửa chữa", cost: "Số tiền", content: "Nội dung sửa chữa" };
+                title.textContent = labels.title;
+                note.textContent = labels.note;
+                actionInput.value = isOil ? "update_oil" : (isPeriodic ? "update_periodic" : "update_repair");
+                recordId.value = button.dataset.recordId || "";
+                dateInput.name = isOil ? "oil_date" : "service_date";
+                dateInput.value = button.dataset.recordDate || "";
+                dateLabel.textContent = labels.date;
+                costLabel.textContent = labels.cost;
+                costInput.value = button.dataset.recordCost || "";
+                costInput.required = !isPeriodic;
+                contentLabel.textContent = labels.content;
+                contentInput.value = button.dataset.recordContent || "";
+                contentInput.required = !isOil;
+                contentField.hidden = isOil;
+                oilFields.hidden = !isOil;
+                odometerInput.value = button.dataset.recordOdometer || "";
+                previousOdometerInput.value = button.dataset.recordPreviousOdometer || "";
+                modal.hidden = false;
+                requestAnimationFrame(() => modal.classList.add("open"));
+                dateInput.focus();
+              };
+              document.querySelectorAll("[data-maintenance-edit-open]").forEach((button) => button.addEventListener("click", () => open(button)));
+              modal.querySelectorAll("[data-maintenance-edit-close]").forEach((button) => button.addEventListener("click", close));
+              modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+              document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.hidden) close(); });
+              costInput.addEventListener("input", () => {
+                const formatted = money(costInput.value);
+                costInput.value = formatted;
+                costInput.setSelectionRange(formatted.length, formatted.length);
+              });
+              form.addEventListener("submit", () => { costInput.value = money(costInput.value); });
+            })();
+          </script>
+        </section>
+        """,
+        selected=selected,
+        center_filter=center_filter,
+        center_filter_label=CENTER_FILTER_LABELS.get(center_filter, center_filter),
+        vehicle_options=vehicle_options,
+        selected_label=selected_label,
+        car=car,
+        schedule=schedule,
+        periodic_rows=periodic_rows,
+        repair_rows=repair_rows,
+        oil_rows=oil_rows,
+        registration_rows=registration_rows,
+        periodic_edit=periodic_edit,
+        repair_edit=repair_edit,
+        oil_edit=oil_edit,
+        registration_edit=registration_edit,
+        periodic_form=periodic_form,
+        repair_form=repair_form,
+        oil_form=oil_form,
+        registration_form=registration_form,
+        focus=focus,
+        focus_label=focus_label,
+        return_to=return_to,
+    )
+    return page(content, title="Quản lý bảo dưỡng và chi phí", active="data")
+
+
+@app.route("/admin/data/template/<kind>")
+@login_required
+def maintenance_template(kind):
+    if not can_manage_data() or kind not in ("repair", "oil"):
+        return Response("Forbidden", status=403)
+    if kind == "repair":
+        columns = ["Biển số", "Ngày sửa chữa", "Nội dung sửa chữa", "Số tiền"]
+        filename = "mau-nhap-sua-chua.xlsx"
+        title = "HƯỚNG DẪN NHẬP DỮ LIỆU SỬA CHỮA"
+        purpose = "Mẫu dùng để nhập nhiều bản ghi sửa chữa cho các xe. Nhập dữ liệu tại sheet Dữ liệu."
+        instructions = [
+            "Mỗi dòng trên sheet Dữ liệu là một lần sửa chữa của một xe.",
+            "Không đổi tên hoặc thứ tự các cột; biển số phải trùng với biển số đang có trong hệ thống.",
+            "Ngày sửa chữa nhập theo dạng DD/MM/YYYY hoặc YYYY-MM-DD, ví dụ 19/05/2026.",
+            "Số tiền chỉ nhập số, không nhập chữ VND hoặc ký hiệu tiền tệ; ví dụ 2376000.",
+            "Có thể xóa dòng ví dụ trong phần Dữ liệu trước khi tải file lên hệ thống.",
+        ]
+        sample = ["29B-078.52", "19/05/2026", "Thay ắc quy; kiểm tra cảm biến", "2376000"]
+    else:
+        columns = ["Biển số", "Ngày thay dầu", "Số km khi thay dầu", "Số km trước", "Chi phí thay dầu"]
+        filename = "mau-nhap-thay-dau.xlsx"
+        title = "HƯỚNG DẪN NHẬP DỮ LIỆU THAY DẦU"
+        purpose = "Mẫu dùng để nhập nhiều lần thay dầu cho các xe. Nhập dữ liệu tại sheet Dữ liệu."
+        instructions = [
+            "Mỗi dòng trên sheet Dữ liệu là một lần thay dầu của một xe.",
+            "Không đổi tên hoặc thứ tự các cột; biển số phải trùng với biển số đang có trong hệ thống.",
+            "Ngày thay dầu nhập theo dạng DD/MM/YYYY hoặc YYYY-MM-DD, ví dụ 01/09/2026.",
+            "Số km khi thay dầu và Số km trước nhập số nguyên dạng chữ, không nhập dấu chấm hoặc dấu phẩy.",
+            "Với lần thay dầu đầu tiên của xe, bắt buộc nhập Số km trước; các lần sau có thể để trống để hệ thống tự lấy lần trước.",
+            "Chi phí thay dầu chỉ nhập số, không nhập chữ VND hoặc ký hiệu tiền tệ; ví dụ 800000.",
+            "Có thể xóa dòng ví dụ trong phần Dữ liệu trước khi tải file lên hệ thống.",
+        ]
+        sample = ["29B-078.52", "01/09/2026", "100000", "95000", "800000"]
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Dữ liệu")
+        guide = workbook.add_worksheet("Hướng dẫn")
+
+        text_format = workbook.add_format({"num_format": "@", "valign": "top"})
+        header = workbook.add_format({"bold": True, "bg_color": "#eaf3fb", "font_color": "#003b70", "border": 1, "border_color": "#c8dced", "align": "center", "valign": "vcenter"})
+        guide_title = workbook.add_format({"bold": True, "font_size": 14, "font_color": "#003b70", "bg_color": "#eaf3fb", "align": "center", "valign": "vcenter"})
+        guide_subtitle = workbook.add_format({"font_color": "#496b88", "text_wrap": True, "valign": "top"})
+        guide_section = workbook.add_format({"bold": True, "font_color": "#003b70", "bg_color": "#f3f7fb", "border": 1, "border_color": "#c8dced"})
+        guide_text = workbook.add_format({"font_color": "#1f3b56", "text_wrap": True, "valign": "top"})
+        sample_format = workbook.add_format({"num_format": "@", "bg_color": "#fff9e8", "border": 1, "border_color": "#ead7a0", "text_wrap": True, "valign": "top"})
+
+        for column_index, column_name in enumerate(columns):
+            worksheet.write_string(0, column_index, column_name, header)
+            worksheet.write_blank(1, column_index, None, text_format)
+            worksheet.set_column(column_index, column_index, 24, text_format)
+        worksheet.freeze_panes(1, 0)
+        worksheet.set_row(0, 26, header)
+        worksheet.autofilter(0, 0, 0, len(columns) - 1)
+
+        last_column = len(columns) - 1
+        guide.merge_range(0, 0, 0, last_column, title, guide_title)
+        guide.merge_range(1, 0, 1, last_column, purpose, guide_subtitle)
+        guide.merge_range(3, 0, 3, last_column, "Hướng dẫn nhập", guide_section)
+        for offset, instruction in enumerate(instructions, start=4):
+            guide.merge_range(offset, 0, offset, last_column, f"{offset - 3}. {instruction}", guide_text)
+            guide.set_row(offset, 30 if len(instruction) > 100 else 22)
+
+        sample_section_row = 4 + len(instructions) + 1
+        sample_header_row = sample_section_row + 1
+        sample_row = sample_header_row + 1
+        guide.merge_range(sample_section_row, 0, sample_section_row, last_column, "Dữ liệu mẫu", guide_section)
+        for column_index, column_name in enumerate(columns):
+            guide.write_string(sample_header_row, column_index, column_name, header)
+            guide.write_string(sample_row, column_index, str(sample[column_index]), sample_format)
+        guide.set_row(sample_header_row, 26, header)
+        guide.set_row(sample_row, 32, sample_format)
+        guide.autofilter(sample_header_row, 0, sample_header_row, last_column)
+        guide.freeze_panes(sample_header_row + 1, 0)
+        guide.set_column(0, last_column, 24, text_format)
+        guide.set_column(0, 0, 20, text_format)
+        if kind == "repair":
+            guide.set_column(2, 2, 42, text_format)
+        else:
+            guide.set_column(1, 1, 20, text_format)
+            guide.set_column(2, 3, 20, text_format)
+    output.seek(0)
+    return send_file(output, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 @app.route("/admin/data", methods=["GET", "POST"])
 @login_required
 def admin_data():
-    if not is_admin():
+    if not can_manage_data():
         return Response("Forbidden", status=403)
+
+    requested_center = request.form.get("center") if request.method == "POST" else request.args.get("center")
+    center_filter = normalize_center_filter(requested_center)
+    requested_focus = request.form.get("focus") if request.method == "POST" else request.args.get("focus")
+    focus = normalize_maintenance_focus(requested_focus)
+    session["admin_center_filter"] = center_filter
+    scope_data = load_data(["xe"])
+    all_scope_plates = set(safe_unique(scope_data["xe"], "Biển số"))
+    managed_plates = scoped_vehicle_plates(scope_data, include_inactive=True)
+    import_scope_plates = set(safe_unique(center_filtered_vehicle_df(scoped_vehicle_df(scope_data["xe"]), center_filter), "Biển số"))
 
     if request.method == "POST":
         action = request.form.get("action")
@@ -5471,33 +9080,126 @@ def admin_data():
         return_plate = normalize_plate(request.form.get("return_plate", ""))
         redirect_tab = "vehicles"
         if action == "save_vehicle":
+            allowed_write = plate in managed_plates or (
+                (is_admin() or is_center_admin()) and plate not in all_scope_plates
+            )
+        else:
+            allowed_write = plate in managed_plates
+        if not allowed_write and action not in (None, ""):
+            flash("Bạn không có quyền quản lý xe này.", "error")
+            return redirect(url_for("admin_data", tab="vehicles", center=center_filter))
+        if action == "save_vehicle":
             redirect_tab = "vehicles"
+            vehicle_center = current_center_scope()
+            if not is_center_admin() and request.form.get("form_mode") != "edit":
+                vehicle_center = center_filter if center_filter != CENTER_FILTER_ALL else MAIN_CENTER_CODE
             if upsert_vehicle(
                 plate,
                 request.form.get("car_type", ""),
                 request.form.get("manufacture_year", ""),
                 request.form.get("status", ""),
+                request.form.get("parking_location", ""),
+                vehicle_center,
             ):
                 flash(f"Đã lưu xe {plate}.", "success")
                 if request.form.get("form_mode") != "edit":
                     plate = ""
             else:
                 flash("Vui lòng nhập biển số xe.", "error")
-        elif action == "save_next":
+        elif action == "add_periodic":
             redirect_tab = "maintenance"
-            if upsert_next_service(
+            ok = add_history_record(plate, request.form.get("service_date", ""), request.form.get("content", ""), request.form.get("cost", ""), COST_TYPE_PERIODIC)
+            flash("Đã thêm bản ghi bảo dưỡng định kỳ." if ok else "Vui lòng nhập đủ ngày và nội dung bảo dưỡng.", "success" if ok else "error")
+        elif action == "update_periodic":
+            redirect_tab = "maintenance"
+            ok = update_history_record(request.form.get("record_id", ""), plate, request.form.get("service_date", ""), request.form.get("content", ""), request.form.get("cost", ""), COST_TYPE_PERIODIC)
+            flash("Đã cập nhật bản ghi bảo dưỡng định kỳ." if ok else "Không tìm thấy bản ghi bảo dưỡng cần sửa.", "success" if ok else "error")
+        elif action == "add_repair":
+            redirect_tab = "maintenance"
+            ok = add_history_record(plate, request.form.get("service_date", ""), request.form.get("content", ""), request.form.get("cost", ""), COST_TYPE_REPAIR)
+            flash("Đã thêm bản ghi sửa chữa." if ok else "Vui lòng nhập đủ ngày và nội dung sửa chữa.", "success" if ok else "error")
+        elif action == "update_repair":
+            redirect_tab = "maintenance"
+            ok = update_history_record(request.form.get("record_id", ""), plate, request.form.get("service_date", ""), request.form.get("content", ""), request.form.get("cost", ""), COST_TYPE_REPAIR)
+            flash("Đã cập nhật bản ghi sửa chữa." if ok else "Không tìm thấy bản ghi sửa chữa cần sửa.", "success" if ok else "error")
+        elif action in ("add_oil", "update_oil"):
+            redirect_tab = "maintenance"
+            ok, message = save_oil_record(plate, request.form.get("oil_date", ""), request.form.get("odometer", ""), request.form.get("previous_odometer", ""), request.form.get("cost", ""), request.form.get("record_id", "") if action == "update_oil" else "")
+            flash(message, "success" if ok else "error")
+        elif action == "delete_oil":
+            redirect_tab = "maintenance"
+            ok = delete_oil_record(request.form.get("record_id", ""), plate)
+            flash("Đã xóa bản ghi thay dầu." if ok else "Không tìm thấy bản ghi thay dầu cần xóa.", "success" if ok else "error")
+        elif action in ("add_registration", "update_registration"):
+            redirect_tab = "maintenance"
+            ok, message = save_registration_record(plate, request.form.get("registration_date", ""), request.form.get("due_month", ""), request.form.get("cost", ""), request.form.get("record_id", "") if action == "update_registration" else "")
+            flash(message, "success" if ok else "error")
+        elif action == "delete_registration":
+            redirect_tab = "maintenance"
+            ok = delete_registration_record(request.form.get("record_id", ""), plate)
+            flash("Đã xóa bản ghi đăng kiểm." if ok else "Không tìm thấy bản ghi đăng kiểm cần xóa.", "success" if ok else "error")
+        elif action == "import_repairs":
+            redirect_tab = "maintenance"
+            ok, message = import_repair_records(request.files.get("file"), import_scope_plates)
+            flash(message, "success" if ok else "error")
+        elif action == "import_oil":
+            redirect_tab = "maintenance"
+            ok, message = import_oil_records(request.files.get("file"), import_scope_plates)
+            flash(message, "success" if ok else "error")
+        elif action == "save_plan":
+            redirect_tab = "maintenance"
+            ok, message = save_maintenance_plan(
                 plate,
-                request.form.get("last_service", ""),
-                request.form.get("next_due", ""),
-                request.form.get("suggestion", ""),
+                request.form.get("planned_date", request.form.get("next_due", "")),
+                request.form.get("content", request.form.get("suggestion", "")),
+                request.form.get("plan_type", PLAN_TYPE_PERIODIC),
+            )
+            flash(message, "success" if ok else "error")
+        elif action == "complete_plan":
+            redirect_tab = "maintenance"
+            ok, message = complete_maintenance_plan(
+                plate,
+                request.form.get("actual_date", request.form.get("service_date", "")),
+                request.form.get("content", ""),
+                request.form.get("cost", ""),
+                request.form.get("cost_type", PLAN_TYPE_PERIODIC),
+            )
+            flash(message, "success" if ok else "error")
+        elif action == "delete_plan":
+            redirect_tab = "maintenance"
+            if delete_maintenance_plan(plate):
+                flash(f"Đã xóa kế hoạch dự kiến của xe {plate}.", "success")
+            else:
+                flash("Không tìm thấy kế hoạch cần xóa.", "error")
+        elif action == "save_registration":
+            redirect_tab = "maintenance"
+            if save_registration(
+                plate,
                 request.form.get("registry_date", ""),
                 request.form.get("registry_due", ""),
-                request.form.get("oil_cost", ""),
                 request.form.get("registry_cost", ""),
+                request.form.get("registry_odo", ""),
             ):
-                flash(f"Đã cập nhật lịch tiếp theo cho xe {plate}.", "success")
+                flash(f"Đã cập nhật thông tin đăng kiểm cho xe {plate}.", "success")
             else:
-                flash("Vui lòng chọn xe trước khi cập nhật lịch.", "error")
+                flash("Vui lòng chọn xe trước khi cập nhật đăng kiểm.", "error")
+        elif action == "save_next":
+            redirect_tab = "maintenance"
+            ok, message = save_maintenance_plan(
+                plate,
+                request.form.get("next_due", ""),
+                request.form.get("suggestion", ""),
+                request.form.get("plan_type", PLAN_TYPE_PERIODIC),
+            )
+            if request.form.get("registry_date") or request.form.get("registry_due") or request.form.get("registry_cost"):
+                save_registration(
+                    plate,
+                    request.form.get("registry_date", ""),
+                    request.form.get("registry_due", ""),
+                    request.form.get("registry_cost", ""),
+                    request.form.get("registry_odo", ""),
+                )
+            flash(message, "success" if ok else "error")
         elif action == "update_next_log":
             redirect_tab = "maintenance"
             record_id = request.form.get("record_id", "")
@@ -5511,8 +9213,9 @@ def admin_data():
                 request.form.get("registry_due", ""),
                 request.form.get("oil_cost", ""),
                 request.form.get("registry_cost", ""),
+                request.form.get("plan_type", PLAN_TYPE_PERIODIC),
             ):
-                flash("Đã lưu dòng lịch kế hoạch.", "success")
+                flash("Đã cập nhật dòng lịch kế hoạch.", "success")
             else:
                 flash("Không tìm thấy dòng lịch kế hoạch cần sửa.", "error")
         elif action == "delete_next_log":
@@ -5551,7 +9254,7 @@ def admin_data():
         elif action == "delete_history":
             redirect_tab = "maintenance"
             record_id = request.form.get("record_id", "")
-            if record_id and delete_history_record(record_id):
+            if record_id and delete_history_record(record_id, plate):
                 flash("Đã xóa bản ghi lịch sử.", "success")
             else:
                 flash("Không tìm thấy bản ghi lịch sử cần xóa.", "error")
@@ -5569,14 +9272,29 @@ def admin_data():
             else:
                 flash("Không tìm thấy xe cần cập nhật.", "error")
         page_arg = request.form.get("page", "").strip()
+        if return_to == "alerts":
+            return redirect(url_for("maintenance_alerts"))
         if return_to == "lookup":
             target_plate = return_plate or plate
             return redirect(url_for("detail", plate=target_plate) if target_plate else url_for("detail"))
         if redirect_tab == "vehicles":
-            return redirect(url_for("admin_data", tab=redirect_tab, page=page_arg) if page_arg else url_for("admin_data", tab=redirect_tab))
-        return redirect(url_for("admin_data", tab=redirect_tab, plate=plate) if plate else url_for("admin_data", tab=redirect_tab))
+            return redirect(
+                url_for("admin_data", tab=redirect_tab, page=page_arg, center=center_filter)
+                if page_arg
+                else url_for("admin_data", tab=redirect_tab, center=center_filter)
+            )
+        maintenance_redirect_args = {"tab": redirect_tab, "plate": plate, "center": center_filter}
+        if focus:
+            maintenance_redirect_args["focus"] = focus
+        return redirect(
+            url_for("admin_data", **maintenance_redirect_args)
+            if plate
+            else url_for("admin_data", tab=redirect_tab, center=center_filter, **({"focus": focus} if focus else {}))
+        )
 
-    data = load_data(["xe", "history", "next"])
+    data = load_data(["xe", "history", "next", "oil", "registration"])
+    data["xe"] = scoped_vehicle_df(data["xe"])
+    data["xe"] = center_filtered_vehicle_df(data["xe"], center_filter)
     tab = request.args.get("tab", "vehicles")
     if tab not in ("vehicles", "maintenance"):
         tab = "vehicles"
@@ -5606,6 +9324,10 @@ def admin_data():
     next_item = {}
     history_rows = []
     selected_history = {}
+    latest_service_date = ""
+    maintenance_state = due_state("")
+    plan_actionable = False
+    plan_type = PLAN_TYPE_PERIODIC
     history_edit_id = request.args.get("history_id", "").strip()
     if selected:
         car_row = data["xe"][data["xe"]["Biển số"].astype(str) == selected]
@@ -5616,12 +9338,24 @@ def admin_data():
             next_item = {"Biển số": selected}
         history_view = data["history"][data["history"]["Biển số"].astype(str) == selected].copy()
         history_rows = build_history_rows(history_view)
+        latest_service_date = latest_maintenance_date(
+            data["history"],
+            selected,
+            next_item.get("Lịch bảo dưỡng gần nhất", ""),
+        )
+        maintenance_state = due_state(next_item.get("Dự kiến lần tiếp theo", ""))
+        plan_due_date = parse_due_date(next_item.get("Dự kiến lần tiếp theo", "")) if next_item else None
+        plan_actionable = bool(plan_due_date and plan_due_date.date() <= now_vn().date())
+        plan_type = normalize_plan_type(next_item.get("LoaiKeHoach", PLAN_TYPE_PERIODIC))
         if new_history_mode:
             selected_history = {}
         elif history_edit_id:
             edit_row = history_view[history_view["ID"].astype(str) == history_edit_id]
             if not edit_row.empty:
                 selected_history = edit_row.iloc[0].to_dict()
+    if tab == "maintenance" and selected:
+        return render_maintenance_workspace(data, selected, center_filter, focus)
+
     car_status = normalize_vehicle_status(car.get("Trạng thái", ""))
 
     vehicle_rows = []
@@ -5635,6 +9369,7 @@ def admin_data():
             {
                 "plate": plate_value,
                 "car_type": row.get("Loại xe", ""),
+                "location": row.get(CAR_LOCATION_COLUMN, ""),
                 "year": normalize_year(row.get("Năm sản xuất")),
                 "status": normalize_vehicle_status(row.get("Trạng thái", "")),
                 "next_due": next_due or "Chưa cập nhật",
@@ -5650,7 +9385,7 @@ def admin_data():
             row
             for row in vehicle_rows
             if normalized_query in " ".join(
-                str(row.get(key, "")) for key in ("plate", "car_type", "year", "status", "next_due")
+                str(row.get(key, "")) for key in ("plate", "car_type", "location", "year", "status", "next_due")
             ).lower()
         ]
 
@@ -5669,6 +9404,7 @@ def admin_data():
         vehicle_page = 1
     if vehicle_page > vehicle_total_pages:
         vehicle_page = vehicle_total_pages
+    vehicle_pagination_pages = pagination_items(vehicle_page, vehicle_total_pages)
     vehicle_start = (vehicle_page - 1) * vehicle_per_page
     vehicle_end = min(vehicle_start + vehicle_per_page, vehicle_total)
     vehicle_page_rows = vehicle_rows[vehicle_start:vehicle_end]
@@ -5679,6 +9415,15 @@ def admin_data():
           <div>
             <h1>Quản lý dữ liệu xe</h1>
           </div>
+          {% if root_admin %}
+            <div class="toolbar center-filter-toolbar">
+              {% for center_code, center_label in center_filters.items() %}
+                <a class="btn {{ 'primary' if center_filter == center_code else '' }}" href="{{ url_for('admin_data', center=center_code, tab=tab) }}">{{ center_label }}</a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <span class="badge">{{ center_filter_label }}</span>
+          {% endif %}
         </section>
 
         <div class="admin-shell">
@@ -5690,12 +9435,16 @@ def admin_data():
               <a class="{{ 'active' if tab == 'vehicles' else '' }}" href="{{ url_for('admin_data', tab='vehicles') }}">
                 Quản lý xe
               </a>
-              <a href="{{ url_for('admin', view='access') }}">
-                Quản lý mã truy cập
-              </a>
-              <a href="{{ url_for('admin', view='audit') }}">
-                Lịch sử truy cập
-              </a>
+              {% if root_admin or center_admin %}
+                <a href="{{ url_for('admin', view='access') }}">
+                  Quản lý mã truy cập
+                </a>
+              {% endif %}
+              {% if root_admin %}
+                <a href="{{ url_for('admin', view='audit') }}">
+                  Lịch sử truy cập
+                </a>
+              {% endif %}
             </nav>
           </aside>
           <div class="admin-content">
@@ -5716,6 +9465,7 @@ def admin_data():
               <input type="hidden" name="action" value="save_vehicle">
               <input type="hidden" name="form_mode" value="{{ 'edit' if vehicle_mode == 'edit' else 'create' }}">
               <input type="hidden" name="page" value="{{ vehicle_page }}">
+              <input type="hidden" name="center" value="{{ center_filter }}">
               <div class="field">
                 <label for="plate">Biển số</label>
                 <input id="plate" name="plate" value="{{ car.get("Biển số", selected) }}" placeholder="VD: 30A12345" required>
@@ -5723,6 +9473,10 @@ def admin_data():
               <div class="field">
                 <label for="car-type">Loại xe</label>
                 <input id="car-type" name="car_type" value="{{ car.get("Loại xe", "") }}" placeholder="VD: Toyota Camry">
+              </div>
+              <div class="field">
+                <label for="parking-location">Địa điểm xe đỗ</label>
+                <input id="parking-location" name="parking_location" value="{{ car.get("DiaDiem", "") }}" placeholder="VD: Cửa Nam">
               </div>
               <div class="form-row">
                 <div class="field">
@@ -5761,6 +9515,7 @@ def admin_data():
             <div class="vehicle-controls">
               <form class="vehicle-search" method="get">
                 <input type="hidden" name="tab" value="vehicles">
+                <input type="hidden" name="center" value="{{ center_filter }}">
                 <input name="q" value="{{ vehicle_query }}" placeholder="Tìm biển số, loại xe, trạng thái">
               </form>
               <span class="badge">{{ vehicle_start + 1 if vehicle_total else 0 }}-{{ vehicle_end }}/{{ vehicle_total }} xe{% if vehicle_query %} / {{ vehicle_all_total }}{% endif %}</span>
@@ -5773,6 +9528,7 @@ def admin_data():
                     <tr>
                       <th>Biển số</th>
                       <th>Loại xe</th>
+                      <th>Địa điểm đỗ</th>
                       <th>Năm</th>
                       <th>Trạng thái</th>
                       <th>Lịch tới</th>
@@ -5784,6 +9540,7 @@ def admin_data():
                       <tr class="{{ 'access-active' if row.selected else '' }}">
                         <td class="code" data-label="Biển số">{{ row.plate }}</td>
                         <td data-label="Loại xe">{{ row.car_type or "Chưa cập nhật" }}</td>
+                        <td data-label="Địa điểm đỗ">{{ row.location or "Chưa cập nhật" }}</td>
                         <td data-label="Năm">{{ row.year }}</td>
                         <td data-label="Trạng thái">{{ row.status or "Chưa cập nhật" }}</td>
                         <td data-label="Lịch tới">{{ row.next_due }}</td>
@@ -5797,11 +9554,17 @@ def admin_data():
                 <div class="pagination">
                   <span class="subtle">Trang {{ vehicle_page }}/{{ vehicle_total_pages }}</span>
                   <div class="pagination-pages">
+                    <a data-preserve-scroll class="btn {{ 'disabled' if vehicle_page <= 1 else '' }}" href="{{ url_for('admin_data', tab='vehicles', mode=vehicle_mode, plate=selected, page=1, q=vehicle_query) if vehicle_mode == 'edit' else url_for('admin_data', tab='vehicles', mode=vehicle_mode, page=1, q=vehicle_query) }}">&laquo; Đầu</a>
                     <a data-preserve-scroll class="btn {{ 'disabled' if vehicle_page <= 1 else '' }}" href="{{ url_for('admin_data', tab='vehicles', mode=vehicle_mode, plate=selected, page=vehicle_page - 1, q=vehicle_query) if vehicle_mode == 'edit' else url_for('admin_data', tab='vehicles', mode=vehicle_mode, page=vehicle_page - 1, q=vehicle_query) }}">Trước</a>
-                    {% for p in range(1, vehicle_total_pages + 1) %}
-                      <a data-preserve-scroll class="btn {{ 'active' if p == vehicle_page else '' }}" href="{{ url_for('admin_data', tab='vehicles', mode=vehicle_mode, plate=selected, page=p, q=vehicle_query) if vehicle_mode == 'edit' else url_for('admin_data', tab='vehicles', mode=vehicle_mode, page=p, q=vehicle_query) }}">{{ p }}</a>
+                    {% for p in vehicle_pagination_pages %}
+                      {% if p == 'ellipsis' %}
+                        <span class="pagination-ellipsis" aria-hidden="true">&hellip;</span>
+                      {% else %}
+                        <a data-preserve-scroll class="btn {{ 'active' if p == vehicle_page else '' }}" href="{{ url_for('admin_data', tab='vehicles', mode=vehicle_mode, plate=selected, page=p, q=vehicle_query) if vehicle_mode == 'edit' else url_for('admin_data', tab='vehicles', mode=vehicle_mode, page=p, q=vehicle_query) }}">{{ p }}</a>
+                      {% endif %}
                     {% endfor %}
                     <a data-preserve-scroll class="btn {{ 'disabled' if vehicle_page >= vehicle_total_pages else '' }}" href="{{ url_for('admin_data', tab='vehicles', mode=vehicle_mode, plate=selected, page=vehicle_page + 1, q=vehicle_query) if vehicle_mode == 'edit' else url_for('admin_data', tab='vehicles', mode=vehicle_mode, page=vehicle_page + 1, q=vehicle_query) }}">Sau</a>
+                    <a data-preserve-scroll class="btn {{ 'disabled' if vehicle_page >= vehicle_total_pages else '' }}" href="{{ url_for('admin_data', tab='vehicles', mode=vehicle_mode, plate=selected, page=vehicle_total_pages, q=vehicle_query) if vehicle_mode == 'edit' else url_for('admin_data', tab='vehicles', mode=vehicle_mode, page=vehicle_total_pages, q=vehicle_query) }}">Cuối &raquo;</a>
                   </div>
                 </div>
               {% endif %}
@@ -5834,7 +9597,10 @@ def admin_data():
               <div>
                 <h2>Chọn xe</h2>
               </div>
-              <span class="badge">{{ selected or "Chưa chọn" }}</span>
+              <div class="toolbar">
+                {% if selected %}<a class="btn" href="{{ url_for('detail', plate=selected) }}" data-maintenance-exit>Quay lại chi tiết xe</a>{% endif %}
+                <span class="badge">{{ selected or "Chưa chọn" }}</span>
+              </div>
             </div>
             {% if vehicle_rows %}
               <form method="get" class="toolbar" id="admin-plate-picker-form">
@@ -5934,60 +9700,104 @@ def admin_data():
           <div class="grid" style="margin-top:12px">
             <section class="panel maintenance-card">
               <div class="section-head">
-                <h2>Lịch bảo dưỡng tiếp theo</h2>
+                <h2>1. Kế hoạch bảo dưỡng dự kiến</h2>
                 <span class="badge">{{ selected }}</span>
               </div>
+              <div class="subtle" style="margin-bottom:10px">Kế hoạch chỉ nhập ngày dự kiến và nội dung. Chưa đến hạn sẽ chưa nhập số tiền.</div>
+              {% if plan_actionable %}
+                <div class="alert warning">Kế hoạch đã đến hạn. Không sửa kế hoạch ở đây; hãy dùng mục <strong>Cập nhật thực hiện</strong> bên dưới để nhập kết quả và số tiền.</div>
+              {% else %}
               <form method="post" class="maintenance-form">
-                <input type="hidden" name="action" value="save_next">
+                <input type="hidden" name="action" value="save_plan">
                 <input type="hidden" name="plate" value="{{ selected }}">
                 <div class="form-row">
                   <div class="field">
-                    <label for="last-service">Lịch bảo dưỡng gần nhất</label>
-                    <input id="last-service" name="last_service" type="date" value="{{ date_input_value(next_item.get("Lịch bảo dưỡng gần nhất", "")) }}">
+                    <label for="plan-date">Ngày dự kiến</label>
+                    <input id="plan-date" name="planned_date" type="date" min="{{ tomorrow }}" value="{{ date_input_value(next_item.get("Dự kiến lần tiếp theo", "")) }}" required>
                   </div>
                   <div class="field">
-                    <label for="next-due">Dự kiến lần tiếp theo</label>
-                    <input id="next-due" name="next_due" type="date" value="{{ date_input_value(next_item.get("Dự kiến lần tiếp theo", "")) }}">
-                  </div>
-                  <div class="field">
-                    <label for="registry-date">Ngày đăng kiểm</label>
-                    <input id="registry-date" name="registry_date" type="date" value="{{ date_input_value(next_item.get("Ngày đăng kiểm", today)) if next_item.get("Ngày đăng kiểm") else today }}">
+                    <label for="plan-type">Loại kế hoạch</label>
+                    <select id="plan-type" name="plan_type">
+                      <option value="periodic" {{ 'selected' if plan_type == 'periodic' else '' }}>Bảo dưỡng định kỳ</option>
+                      <option value="repair" {{ 'selected' if plan_type == 'repair' else '' }}>Sửa chữa</option>
+                    </select>
                   </div>
                 </div>
+                <div class="field">
+                  <label for="plan-content">Nội dung dự kiến</label>
+                  <textarea id="plan-content" name="content" placeholder="VD: thay dầu, kiểm tra phanh..." required>{{ next_item.get("Gợi ý nội dung", "") if next_item.get("Dự kiến lần tiếp theo") else "" }}</textarea>
+                </div>
+                <button class="btn primary full" type="submit">{{ 'Cập nhật kế hoạch' if next_item.get("Dự kiến lần tiếp theo") else 'Thêm kế hoạch' }}</button>
+              </form>
+              {% endif %}
+              {% if not plan_actionable %}
+                <div class="workflow-inline-step">
+                  <h3>2. Cập nhật thực hiện</h3>
+                  {% if next_item.get("Dự kiến lần tiếp theo") %}
+                    <div class="workflow-empty">Chưa đến ngày kế hoạch. Khi đến hạn, biểu mẫu nhập ngày thực tế, nội dung và số tiền sẽ xuất hiện ở đây.</div>
+                  {% else %}
+                    <div class="workflow-empty">Chưa có kế hoạch dự kiến nên chưa có bước thực hiện.</div>
+                  {% endif %}
+                </div>
+              {% endif %}
+              {% if plan_actionable %}
+                <form method="post" class="maintenance-form">
+                  <input type="hidden" name="action" value="complete_plan">
+                  <input type="hidden" name="plate" value="{{ selected }}">
+                  <div class="alert warning"><strong>2. Cập nhật thực hiện:</strong> nhập ngày thực tế, nội dung và số tiền để chuyển thành lịch sử.</div>
+                  <div class="form-row">
+                    <div class="field">
+                      <label class="required-field" for="actual-date">Ngày thực hiện <span class="required-mark" aria-hidden="true">*</span></label>
+                      <input id="actual-date" class="required-input" name="actual_date" type="date" min="{{ date_input_value(next_item.get("Dự kiến lần tiếp theo", "")) }}" max="{{ today }}" value="{{ today }}" required>
+                    </div>
+                    <div class="field">
+                      <label class="required-field" for="actual-cost">Số tiền thực tế <span class="required-mark" aria-hidden="true">*</span></label>
+                      <input id="actual-cost" class="money-input required-input" name="cost" inputmode="numeric" autocomplete="off" placeholder="VD: 1.500.000" required>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="actual-content">Nội dung thực tế</label>
+                    <textarea id="actual-content" name="content" required>{{ next_item.get("Gợi ý nội dung", "") }}</textarea>
+                  </div>
+                  <input type="hidden" name="cost_type" value="{{ plan_type }}">
+                  <button class="btn primary full" type="submit">Cập nhật đã thực hiện</button>
+                </form>
+              {% endif %}
+              {% if next_item.get("Dự kiến lần tiếp theo") %}
+                <form method="post" class="maintenance-form" onsubmit="return confirm('Xóa kế hoạch dự kiến của xe này?')">
+                  <input type="hidden" name="action" value="delete_plan">
+                  <input type="hidden" name="plate" value="{{ selected }}">
+                  <button class="btn danger full" type="submit">Xóa kế hoạch dự kiến</button>
+                </form>
+              {% endif %}
+              <form method="post" class="maintenance-form" id="registration-form">
+                <input type="hidden" name="action" value="save_registration">
+                <input type="hidden" name="plate" value="{{ selected }}">
+                <div class="section-head"><h3>Thông tin đăng kiểm</h3></div>
                 <div class="form-row">
+                  <div class="field">
+                    <label for="registry-date">Ngày đăng kiểm</label>
+                    <input id="registry-date" name="registry_date" type="date" value="{{ date_input_value(next_item.get("Ngày đăng kiểm", "")) }}">
+                  </div>
                   <div class="field">
                     <label for="registry-due">Hạn đăng kiểm đến</label>
                     <input id="registry-due" name="registry_due" type="date" value="{{ date_input_value(next_item.get("Hạn đăng kiểm đến", "")) }}">
                   </div>
                 </div>
                 <div class="field">
-                  <label for="suggestion">Gợi ý nội dung</label>
-                  <textarea id="suggestion" name="suggestion" placeholder="VD: thay dầu, kiểm tra phanh...">{{ next_item.get("Gợi ý nội dung", "") }}</textarea>
+                  <label for="registry-cost">Chi phí đăng kiểm thực tế</label>
+                  <input id="registry-cost" class="money-input" name="registry_cost" value="{{ format_money_input(next_item.get("Chi phí đăng kiểm", "")) if next_item.get("Chi phí đăng kiểm") else "" }}" inputmode="numeric" autocomplete="off" placeholder="VD: 2.500.000">
                 </div>
-                <div class="form-row">
-                  <div class="field">
-                    <label for="oil-cost">Chi phí thay dầu</label>
-                    <input id="oil-cost" class="money-input" name="oil_cost" value="{{ format_money_input(next_item.get("Chi phí thay dầu", "")) }}" inputmode="numeric" autocomplete="off" placeholder="VD: 1.500.000" pattern="[0-9]+([.][0-9]{3})*" title="Vui lòng nhập số tiền, ví dụ 1.500.000" required>
-                  </div>
-                  <div class="field">
-                    <label for="registry-cost">Chi phí đăng kiểm</label>
-                    <input id="registry-cost" class="money-input" name="registry_cost" value="{{ format_money_input(next_item.get("Chi phí đăng kiểm", "")) }}" inputmode="numeric" autocomplete="off" placeholder="VD: 2.500.000" pattern="[0-9]+([.][0-9]{3})*" title="Vui lòng nhập số tiền, ví dụ 2.500.000" required>
-                  </div>
-                </div>
-                <button class="btn primary full" type="submit">Lưu lịch tiếp theo</button>
+                <button class="btn full" type="submit">Lưu thông tin đăng kiểm</button>
               </form>
-              {% if next_item %}
-                <form method="post" class="maintenance-form" onsubmit="return confirm('Xóa lịch bảo dưỡng/đăng kiểm tiếp theo của xe này?')">
-                  <input type="hidden" name="action" value="delete_next">
-                  <input type="hidden" name="plate" value="{{ selected }}">
-                  <button class="btn danger full" type="submit">Xóa lịch tiếp theo</button>
-                </form>
-              {% endif %}
             </section>
 
             <section class="panel maintenance-card">
               <div class="section-head">
-                <h2>{{ "Sửa lịch sử bảo dưỡng" if selected_history else "Thêm lịch sử bảo dưỡng" }}</h2>
+                <div>
+                  <h2>{{ "Sửa bản ghi đã thực hiện" if selected_history else "3. Ngoài kế hoạch" }}</h2>
+                  {% if not selected_history %}<p class="subtle" style="margin:3px 0 0">Dùng khi công việc đã thực hiện nhưng không có kế hoạch dự kiến.</p>{% endif %}
+                </div>
                 <span class="badge">{{ selected }}</span>
               </div>
               <form method="post" class="maintenance-form">
@@ -6015,7 +9825,7 @@ def admin_data():
                 </div>
                 <div class="field">
                   <label for="history-content">Nội dung</label>
-                  <textarea id="history-content" name="content" placeholder="Nhập nội dung bảo dưỡng" required>{{ selected_history.get("Nội dung", "") if selected_history else "" }}</textarea>
+                  <textarea id="history-content" name="content" placeholder="Nhập nội dung bảo dưỡng hoặc sửa chữa" required>{{ selected_history.get("Nội dung", "") if selected_history else "" }}</textarea>
                 </div>
                 <button class="btn primary full" type="submit">{{ "Lưu thay đổi" if selected_history else "Thêm bản ghi" }}</button>
                 {% if selected_history %}
@@ -6028,7 +9838,6 @@ def admin_data():
           <script>
             (() => {
               const moneyInputs = Array.from(document.querySelectorAll(".money-input"));
-              if (!moneyInputs.length) return;
 
               const cleanMoney = (value) => value.replace(/[^\d]/g, "");
               const formatMoney = (value) => {
@@ -6043,6 +9852,28 @@ def admin_data():
                   input.value = formatted;
                   input.setSelectionRange(formatted.length, formatted.length);
                 });
+              });
+            })();
+          </script>
+          <script>
+            (() => {
+              const exitButton = document.querySelector("[data-maintenance-exit]");
+              if (!exitButton) return;
+              const forms = Array.from(document.querySelectorAll(".maintenance-card form"));
+              const trackedFields = (form) => Array.from(form.querySelectorAll("input:not([type='hidden']):not([type='submit']):not([type='button']), textarea, select"));
+              const snapshots = forms.map((form) => {
+                const fields = trackedFields(form);
+                return { fields, values: fields.map((field) => field.type === "checkbox" ? field.checked : field.value) };
+              });
+              const isDirty = () => snapshots.some(({ fields, values }) => fields.some((field, index) => {
+                const value = field.type === "checkbox" ? field.checked : field.value;
+                return value !== values[index];
+              }));
+
+              exitButton.addEventListener("click", (event) => {
+                if (isDirty() && !window.confirm("Bạn đang nhập dở. Bạn có muốn thoát mà không lưu không?")) {
+                  event.preventDefault();
+                }
               });
             })();
           </script>
@@ -6105,10 +9936,15 @@ def admin_data():
         car=car,
         car_status=car_status,
         next_item=next_item,
+        latest_service_date=latest_service_date,
+        maintenance_state=maintenance_state,
+        plan_actionable=plan_actionable,
+        plan_type=plan_type,
         vehicle_rows=vehicle_rows,
         vehicle_page_rows=vehicle_page_rows,
         vehicle_page=vehicle_page,
         vehicle_total_pages=vehicle_total_pages,
+        vehicle_pagination_pages=vehicle_pagination_pages,
         vehicle_total=vehicle_total,
         vehicle_all_total=vehicle_all_total,
         vehicle_start=vehicle_start,
@@ -6120,10 +9956,17 @@ def admin_data():
         history_rows=history_rows,
         selected_history=selected_history,
         today=now_vn().strftime("%Y-%m-%d"),
+        tomorrow=(now_vn().date() + timedelta(days=1)).isoformat(),
         date_input_value=date_input_value,
         format_short_date=format_short_date,
         format_money_input=format_money_input,
         normalize_history_cost_type=normalize_history_cost_type,
+        normalize_plan_type=normalize_plan_type,
+        root_admin=is_admin(),
+        center_admin=is_center_admin(),
+        center_filter=center_filter,
+        center_filter_label=CENTER_FILTER_LABELS.get(center_filter, CENTER_FILTER_LABELS[CENTER_FILTER_ALL]),
+        center_filters=CENTER_FILTER_LABELS,
     )
     return page(content, title="Quản lý dữ liệu xe", active="data")
 
@@ -6131,10 +9974,21 @@ def admin_data():
 @app.route("/admin", methods=["GET", "POST"])
 @login_required
 def admin():
-    if not is_admin():
+    if not can_manage_data():
         return Response("Forbidden", status=403)
 
+    requested_center = request.form.get("center") if request.method == "POST" else request.args.get("center")
+    center_filter = normalize_center_filter(requested_center)
+    session["admin_center_filter"] = center_filter
+    admin_view = request.args.get("view", "access")
+    if admin_view not in ("access", "audit"):
+        admin_view = "access"
+    if admin_view == "audit" and not is_admin():
+        return Response("Forbidden", status=403)
     data = load_data(["xe", "access"])
+    data["xe"] = center_filtered_vehicle_df(scoped_vehicle_df(data["xe"]), center_filter)
+    scope_plates = scoped_vehicle_plates(data, include_inactive=True)
+    data["xe"] = scoped_vehicle_df(data["xe"])
     active_vehicles = active_vehicle_df(data["xe"])
     plates = safe_unique(active_vehicles, "Biển số")
     plate_labels = plate_label_map(active_vehicles)
@@ -6154,17 +10008,17 @@ def admin():
                 flash(f"Đã tạo mã {code} cho {len(selected_plates)} xe, hiệu lực {ttl_hours} giờ.", "success")
         elif action == "revoke":
             code = request.form.get("code", "").strip()
-            if code and revoke_access_code(code):
+            if code and access_code_is_in_scope(code, scope_plates) and revoke_access_code(code):
                 flash(f"Đã thu hồi mã {code}.", "success")
             else:
-                flash("Không tìm thấy mã cần thu hồi.", "error")
+                flash("Mã không tồn tại hoặc nằm ngoài phạm vi quản lý.", "error")
         elif action == "extend":
             code = request.form.get("code", "").strip()
             extra_hours = parse_ttl_hours(request.form.get("extra_hours", ACCESS_TTL_HOURS))
-            if code and extend_access_code(code, extra_hours):
+            if code and access_code_is_in_scope(code, scope_plates) and extend_access_code(code, extra_hours):
                 flash(f"Đã gia hạn mã {code} thêm {extra_hours} giờ.", "success")
             else:
-                flash("Không tìm thấy mã cần gia hạn.", "error")
+                flash("Mã không tồn tại hoặc nằm ngoài phạm vi quản lý.", "error")
         return redirect(url_for("admin"))
 
     access_rows = []
@@ -6172,6 +10026,11 @@ def admin():
         for _, row in data["access"].iterrows():
             code = str(row.get("MaTruyCap", ""))
             if ADMIN_KEY and code == ADMIN_KEY:
+                continue
+            code_plates = parse_plate_list(row.get("BienSo", ""))
+            if center_filter != CENTER_FILTER_ALL and (
+                not code_plates or not set(code_plates).issubset(scope_plates)
+            ):
                 continue
             access_rows.append(
                 {
@@ -6187,34 +10046,80 @@ def admin():
     access_rows = sorted(access_rows, key=lambda item: item["sort_time"], reverse=True)
 
     audit_rows = []
-    init_db()
-    with db_connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT created_at, actor_code, action, plate, detail, ip_addr
-            FROM audit_logs
-            ORDER BY id DESC
-            LIMIT 60
-            """
-        ).fetchall()
-    for row in rows:
-        actor = str(row["actor_code"] or "").strip() or "-"
-        if ADMIN_KEY and actor == ADMIN_KEY:
-            actor = "ADMIN"
-        audit_rows.append(
-            {
-                "created_at": format_datetime_display(row["created_at"]),
-                "actor": actor,
-                "action": AUDIT_ACTION_LABELS.get(row["action"], row["action"] or ""),
-                "plate": row["plate"] or "",
-                "detail": row["detail"] or "",
-                "ip_addr": row["ip_addr"] or "",
-            }
-        )
-
-    admin_view = request.args.get("view", "access")
-    if admin_view not in ("access", "audit"):
-        admin_view = "access"
+    audit_query = request.args.get("audit_q", "").strip()
+    audit_actor = request.args.get("audit_actor", "").strip()
+    audit_action = request.args.get("audit_action", "").strip()
+    audit_from = request.args.get("audit_from", "").strip()
+    audit_to = request.args.get("audit_to", "").strip()
+    audit_action_options = [
+        {"value": action, "label": label}
+        for action, label in sorted(AUDIT_ACTION_LABELS.items(), key=lambda item: item[1])
+    ]
+    audit_actor_options = [
+        {"code": code, "label": admin_actor_label(code)}
+        for code in admin_actor_codes()
+    ]
+    if admin_view == "audit":
+        audit_clauses = []
+        audit_params = []
+        actor_codes = admin_actor_codes()
+        if actor_codes:
+            placeholders = ", ".join("?" for _ in actor_codes)
+            audit_clauses.append(f"actor_code IN ({placeholders})")
+            audit_params.extend(actor_codes)
+        else:
+            audit_clauses.append("1 = 0")
+        if center_filter != CENTER_FILTER_ALL:
+            if scope_plates:
+                placeholders = ", ".join("?" for _ in scope_plates)
+                audit_clauses.append(f"plate IN ({placeholders})")
+                audit_params.extend(sorted(scope_plates))
+            else:
+                audit_clauses.append("1 = 0")
+        if audit_query:
+            like_query = f"%{audit_query.lower()}%"
+            audit_clauses.append(
+                "(LOWER(COALESCE(actor_code, '')) LIKE ? "
+                "OR LOWER(COALESCE(action, '')) LIKE ? "
+                "OR LOWER(COALESCE(plate, '')) LIKE ? "
+                "OR LOWER(COALESCE(detail, '')) LIKE ?)"
+            )
+            audit_params.extend([like_query] * 4)
+        if audit_actor in actor_codes:
+            audit_clauses.append("actor_code = ?")
+            audit_params.append(audit_actor)
+        if audit_action in AUDIT_ACTION_LABELS:
+            audit_clauses.append("action = ?")
+            audit_params.append(audit_action)
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", audit_from):
+            audit_clauses.append("substr(created_at, 1, 10) >= ?")
+            audit_params.append(audit_from)
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", audit_to):
+            audit_clauses.append("substr(created_at, 1, 10) <= ?")
+            audit_params.append(audit_to)
+        init_db()
+        with db_connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT created_at, actor_code, action, plate, detail, ip_addr
+                FROM audit_logs
+                WHERE {' AND '.join(audit_clauses)}
+                ORDER BY id DESC
+                LIMIT 200
+                """,
+                audit_params,
+            ).fetchall()
+        for row in rows:
+            audit_rows.append(
+                {
+                    "created_at": format_datetime_display(row["created_at"]),
+                    "actor": admin_actor_label(row["actor_code"]),
+                    "action": AUDIT_ACTION_LABELS.get(row["action"], row["action"] or ""),
+                    "plate": row["plate"] or "",
+                    "detail": row["detail"] or "",
+                    "ip_addr": row["ip_addr"] or "",
+                }
+            )
 
     content = render_template_string(
         r"""
@@ -6222,6 +10127,15 @@ def admin():
           <div>
             <h1>{{ 'Lịch sử truy cập' if admin_view == 'audit' else 'Quản lý mã truy cập' }}</h1>
           </div>
+          {% if root_admin %}
+            <div class="toolbar center-filter-toolbar">
+              {% for center_code, center_label in center_filters.items() %}
+                <a class="btn {{ 'primary' if center_filter == center_code else '' }}" href="{{ url_for('admin', view=admin_view, center=center_code) }}">{{ center_label }}</a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <span class="badge">{{ center_filter_label }}</span>
+          {% endif %}
         </section>
 
         <div class="admin-shell">
@@ -6230,15 +10144,17 @@ def admin():
               <h2>Quản trị</h2>
             </div>
             <nav class="admin-menu">
-              <a href="{{ url_for('admin_data') }}">
+              <a href="{{ url_for('admin_data', center=center_filter) }}">
                 Quản lý xe
               </a>
-              <a class="{{ 'active' if admin_view == 'access' else '' }}" href="{{ url_for('admin', view='access') }}">
+              <a class="{{ 'active' if admin_view == 'access' else '' }}" href="{{ url_for('admin', view='access', center=center_filter) }}">
                 Quản lý mã truy cập
               </a>
-              <a class="{{ 'active' if admin_view == 'audit' else '' }}" href="{{ url_for('admin', view='audit') }}">
-                Lịch sử truy cập
-              </a>
+              {% if root_admin %}
+                <a class="{{ 'active' if admin_view == 'audit' else '' }}" href="{{ url_for('admin', view='audit', center=center_filter) }}">
+                  Lịch sử thao tác
+                </a>
+              {% endif %}
             </nav>
           </aside>
           <div class="admin-content">
@@ -6253,6 +10169,7 @@ def admin():
               <div class="inline-modal-body">
                 <form method="post" id="access-create-form">
                   <input type="hidden" name="action" value="create">
+                  <input type="hidden" name="center" value="{{ center_filter }}">
                   <input type="hidden" name="plates" id="admin-plate-value" value="">
                   <div class="field">
                     <label for="admin-plate-search">Xe được cấp quyền</label>
@@ -6501,9 +10418,21 @@ def admin():
           {% else %}
           <section class="panel admin-management-panel">
             <div class="section-head">
-              <h2>Lịch sử truy cập</h2>
+              <h2>Lịch sử thao tác quản trị</h2>
               <span class="badge">{{ audit_rows|length }} mục gần nhất</span>
             </div>
+            <form class="audit-filter" method="get">
+              <input type="hidden" name="view" value="audit">
+              <input type="hidden" name="center" value="{{ center_filter }}">
+              <div class="audit-filter-grid">
+                <div class="field"><label for="audit-q">Tìm kiếm</label><input id="audit-q" name="audit_q" value="{{ audit_query }}" placeholder="Biển số, nội dung hoặc thao tác"></div>
+                <div class="field"><label for="audit-actor">Người thực hiện</label><select id="audit-actor" name="audit_actor"><option value="">Tất cả quản trị</option>{% for option in audit_actor_options %}<option value="{{ option.code }}" {{ 'selected' if audit_actor == option.code else '' }}>{{ option.label }}</option>{% endfor %}</select></div>
+                <div class="field"><label for="audit-action">Loại thao tác</label><select id="audit-action" name="audit_action"><option value="">Tất cả thao tác</option>{% for option in audit_action_options %}<option value="{{ option.value }}" {{ 'selected' if audit_action == option.value else '' }}>{{ option.label }}</option>{% endfor %}</select></div>
+                <div class="field"><label for="audit-from">Từ ngày</label><input id="audit-from" type="date" name="audit_from" value="{{ audit_from }}"></div>
+                <div class="field"><label for="audit-to">Đến ngày</label><input id="audit-to" type="date" name="audit_to" value="{{ audit_to }}"></div>
+              </div>
+              <div class="form-actions"><button class="btn primary" type="submit">Tra cứu</button><a class="btn" href="{{ url_for('admin', view='audit', center=center_filter) }}">Xóa bộ lọc</a></div>
+            </form>
             {% if audit_rows %}
               <div class="audit-log-list">
                 {% for row in audit_rows %}
@@ -6541,7 +10470,19 @@ def admin():
         plate_labels=plate_labels,
         access_rows=access_rows,
         audit_rows=audit_rows,
+        audit_query=audit_query,
+        audit_actor=audit_actor,
+        audit_action=audit_action,
+        audit_from=audit_from,
+        audit_to=audit_to,
+        audit_actor_options=audit_actor_options,
+        audit_action_options=audit_action_options,
         admin_view=admin_view,
+        root_admin=is_admin(),
+        center_admin=is_center_admin(),
+        center_filter=center_filter,
+        center_filter_label=CENTER_FILTER_LABELS.get(center_filter, CENTER_FILTER_LABELS[CENTER_FILTER_ALL]),
+        center_filters=CENTER_FILTER_LABELS,
     )
     return page(content, title="Quản lý mã", active="admin")
 
