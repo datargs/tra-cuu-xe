@@ -279,6 +279,8 @@ class AreaScopeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Tài khoản quản trị khu vực".encode("utf-8"), response.data)
         self.assertIn("Bắc Ninh".encode("utf-8"), response.data)
+        self.assertNotIn("Đang hoạt động".encode("utf-8"), response.data)
+        self.assertNotIn("Bỏ trống để hệ thống tạo mã ngẫu nhiên.".encode("utf-8"), response.data)
 
         rotate_response = post(
             root_client,

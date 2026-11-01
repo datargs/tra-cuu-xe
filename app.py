@@ -10841,12 +10841,6 @@ def admin():
               align-items: center;
             }
             .area-admin-card .area-admin-key-form input { min-width: 0; width: 100%; }
-            .area-admin-card .area-admin-key-help {
-              grid-column: 1 / -1;
-              width: auto;
-              font-size: 11px;
-              line-height: 1.2;
-            }
             .area-admin-card .access-card-actions > form:not(.area-admin-key-form) { align-self: end; }
             .area-admin-card .access-card-actions > form:not(.area-admin-key-form) .btn { width: auto; min-width: 112px; }
             .area-admin-card .access-card-actions .btn { min-height: 36px; }
@@ -10862,7 +10856,6 @@ def admin():
               .area-admin-card .access-card-actions { display: flex; flex-wrap: wrap; }
               .area-admin-card .area-admin-key-form { display: flex; flex: 1 1 100%; flex-wrap: wrap; }
               .area-admin-card .area-admin-key-form input { min-width: 220px; flex: 1 1 220px; }
-              .area-admin-card .area-admin-key-help { flex: 1 1 100%; }
             }
           </style>
           <section class="panel admin-management-panel">
@@ -10879,7 +10872,6 @@ def admin():
                   <div class="access-code-main">
                     <span class="access-code-label">Đơn vị</span>
                     <strong class="access-code-value">{{ account.label }}</strong>
-                    <span class="status-pill {{ 'active' if account.active else 'expired' }}">{{ 'Đang hoạt động' if account.active else 'Đang tắt' }}</span>
                   </div>
                   <div class="access-code-meta">
                     <span class="access-code-label">Mã hiện tại</span>
@@ -10892,7 +10884,6 @@ def admin():
                       <input type="hidden" name="area_code" value="{{ account.area_code }}">
                       <input name="custom_key" type="text" minlength="6" maxlength="64" pattern="\S{6,64}" placeholder="Tự đặt mã hoặc để trống" aria-label="Mã tự đặt cho {{ account.label }}">
                       <button class="btn primary" type="submit" onclick="return confirm('Đổi mã đăng nhập tài khoản này? Mã cũ sẽ mất hiệu lực.')">Đặt mã</button>
-                      <span class="subtle area-admin-key-help">Bỏ trống để hệ thống tạo mã ngẫu nhiên.</span>
                     </form>
                     <form method="post">
                       <input type="hidden" name="action" value="set_area_admin_key">
