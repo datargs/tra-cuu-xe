@@ -73,11 +73,11 @@ CENTER_FILTER_LABELS = {
 PARKING_LOCATION_OPTIONS = [
     "Trụ sở",
     "Cửa Nam",
-    "BPKD Bắc Hà Nội",
-    "BPKD Tây Hà Nội",
-    "BPKD Vĩnh Phúc",
-    "TT QLTM Hải Phòng",
-    "TT QLTM Bắc Ninh",
+    "Bắc Hà Nội",
+    "Tây Hà Nội",
+    "Vĩnh Phúc",
+    "Hải Phòng",
+    "Bắc Ninh",
 ]
 
 SHEET_XE = "Xe"
@@ -9102,12 +9102,17 @@ def admin_data():
             vehicle_center = current_center_scope()
             if not is_center_admin() and request.form.get("form_mode") != "edit":
                 vehicle_center = center_filter if center_filter != CENTER_FILTER_ALL else MAIN_CENTER_CODE
+            parking_location = (
+                current_area_label()
+                if is_area_admin()
+                else request.form.get("parking_location", "")
+            )
             if upsert_vehicle(
                 plate,
                 request.form.get("car_type", ""),
                 request.form.get("manufacture_year", ""),
                 request.form.get("status", ""),
-                request.form.get("parking_location", ""),
+                parking_location,
                 vehicle_center,
             ):
                 flash(f"Đã lưu xe {plate}.", "success")
@@ -9366,8 +9371,13 @@ def admin_data():
         return render_maintenance_workspace(data, selected, center_filter, focus)
 
     car_status = normalize_vehicle_status(car.get("Trạng thái", ""))
-    parking_location = str(car.get(CAR_LOCATION_COLUMN, "") or "").strip()
-    parking_location_options = list(PARKING_LOCATION_OPTIONS)
+    area_admin = is_area_admin()
+    parking_location = (
+        current_area_label()
+        if area_admin
+        else str(car.get(CAR_LOCATION_COLUMN, "") or "").strip()
+    )
+    parking_location_options = [parking_location] if area_admin else list(PARKING_LOCATION_OPTIONS)
     if parking_location and parking_location not in parking_location_options:
         parking_location_options.insert(0, parking_location)
 
@@ -9495,6 +9505,9 @@ def admin_data():
                     <option value="{{ location }}" {{ 'selected' if parking_location == location else '' }}>{{ location }}</option>
                   {% endfor %}
                 </select>
+                {% if area_admin %}
+                  <div class="subtle">Địa điểm được tự động cố định theo khu vực quản trị.</div>
+                {% endif %}
               </div>
               <div class="form-row">
                 <div class="field">
@@ -9955,6 +9968,7 @@ def admin_data():
         car_status=car_status,
         parking_location=parking_location,
         parking_location_options=parking_location_options,
+        area_admin=area_admin,
         next_item=next_item,
         latest_service_date=latest_service_date,
         maintenance_state=maintenance_state,

@@ -120,6 +120,32 @@ class AreaScopeTest(unittest.TestCase):
             conn.close()
         self.assertEqual(row["status"], app.VEHICLE_STATUS_ACTIVE)
 
+    def test_center_admin_forces_parking_location_to_own_center(self):
+        response = self.client.post(
+            "/admin/data",
+            data={
+                "action": "save_vehicle",
+                "form_mode": "create",
+                "plate": "30A-444.44",
+                "car_type": "Area Location Test",
+                "manufacture_year": "2025",
+                "status": app.VEHICLE_STATUS_ACTIVE,
+                "parking_location": "Trụ sở",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        conn = app.db_connect()
+        try:
+            created = conn.execute(
+                "SELECT center, parking_location FROM cars WHERE plate = ?",
+                ("30A-444.44",),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(created)
+        self.assertEqual(created["center"], "cua_nam")
+        self.assertEqual(created["parking_location"], "Cửa Nam")
+
     def test_root_admin_can_switch_between_two_centers(self):
         client = app.app.test_client()
         response = client.post("/login", data={"code": "ROOT-TEST-KEY"})
@@ -163,6 +189,7 @@ class AreaScopeTest(unittest.TestCase):
                 "manufacture_year": "2025",
                 "status": app.VEHICLE_STATUS_ACTIVE,
                 "center": "cua_nam",
+                "parking_location": "Hải Phòng",
             },
         )
         self.assertEqual(response.status_code, 302)
@@ -170,13 +197,14 @@ class AreaScopeTest(unittest.TestCase):
         conn = app.db_connect()
         try:
             created = conn.execute(
-                "SELECT center FROM cars WHERE plate = ?",
+                "SELECT center, parking_location FROM cars WHERE plate = ?",
                 ("30C-333.33",),
             ).fetchone()
         finally:
             conn.close()
         self.assertIsNotNone(created)
         self.assertEqual(created["center"], "cua_nam")
+        self.assertEqual(created["parking_location"], "Hải Phòng")
 
 
 if __name__ == "__main__":
