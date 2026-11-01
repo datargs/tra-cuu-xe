@@ -13,11 +13,15 @@ env/
 
 logs/
 *.log
+runtime/
+backup/
 
 *.db
 *.sqlite
 *.sqlite3
 tracuuxe.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 
 .DS_Store
 Thumbs.db

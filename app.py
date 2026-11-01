@@ -1,11 +1,15 @@
 from datetime import datetime, timedelta
 from functools import wraps
 from io import BytesIO
+import hashlib
+import hmac
 import os
 import random
 import re
+import secrets
 import sqlite3
 import string
+import threading
 import time
 import unicodedata
 
@@ -13,6 +17,7 @@ from dotenv import load_dotenv
 from flask import (
     abort,
     Flask,
+    jsonify,
     Response,
     flash,
     has_request_context,
@@ -23,7 +28,9 @@ from flask import (
     session,
     url_for,
 )
+from markupsafe import Markup, escape
 import pandas as pd
+from werkzeug.exceptions import RequestEntityTooLarge
 
 
 load_dotenv()
@@ -31,7 +38,16 @@ ADMIN_KEY = os.environ.get("TRACUUXE_ADMIN_KEY", "")
 ACCESS_TTL_HOURS = 24
 INACTIVITY_TIMEOUT_MINUTES = 15
 CACHE_TTL_SECONDS = 900
-DATA_DB_PATH = os.environ.get("TRACUUXE_DB_PATH", os.path.join(os.path.dirname(__file__), "tracuuxe.sqlite3"))
+DATA_DB_PATH = os.environ.get(
+    "TRACUUXE_DB_PATH",
+    os.path.join(os.environ.get("ProgramData", os.path.dirname(__file__)), "TraCuuXe", "tracuuxe.sqlite3"),
+)
+MAX_IMPORT_ROWS = 10000
+MAX_IMPORT_COLUMNS = 32
+LOGIN_MAX_FAILURES = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 300
+LOGIN_LOCKOUT_SECONDS = 300
+CSRF_SESSION_KEY = "_csrf_token"
 
 MAIN_CENTER_CODE = "main"
 AREA_ADMIN_SPECS = {
@@ -143,13 +159,22 @@ AUDIT_ACTION_LABELS = {
     "add_history_record": "Thêm lịch sử bảo dưỡng",
     "update_history_record": "Sửa lịch sử bảo dưỡng",
     "delete_history_record": "Xóa lịch sử bảo dưỡng",
+    "rotate_area_admin": "Đổi mã tài khoản khu vực",
+    "toggle_area_admin": "Bật/tắt tài khoản khu vực",
 }
 
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    MAX_CONTENT_LENGTH=8 * 1024 * 1024,
+)
 
 _cache = {"sheets": {}}
+_login_failures = {}
+_login_failures_lock = threading.Lock()
 
 BAD_SCAN_PREFIXES = (
     "/wp-",
@@ -196,6 +221,52 @@ def block_common_scanners():
         abort(403)
 
 
+def csrf_token_value():
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+def csrf_input():
+    token = escape(csrf_token_value())
+    return Markup(f'<input type="hidden" name="_csrf_token" value="{token}">')
+
+
+@app.context_processor
+def security_template_context():
+    return {"csrf_token_value": csrf_token_value, "csrf_input": csrf_input}
+
+
+@app.before_request
+def validate_csrf():
+    if request.method != "POST":
+        return None
+    expected = session.get(CSRF_SESSION_KEY)
+    supplied = request.form.get("_csrf_token", "") or request.headers.get("X-CSRF-Token", "")
+    if not expected or not supplied or not hmac.compare_digest(str(expected), str(supplied)):
+        abort(400, description="CSRF token không hợp lệ hoặc đã hết phiên.")
+    return None
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def request_too_large(_error):
+    return Response("File hoặc request vượt quá giới hạn 8 MB.", status=413)
+
+
+@app.route("/healthz")
+def healthz():
+    try:
+        init_db()
+        with db_connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return jsonify({"status": "ok", "database": "ok"}), 200
+    except Exception:
+        app.logger.exception("Health check failed")
+        return jsonify({"status": "error", "database": "unavailable"}), 503
+
+
 @app.route("/robots.txt")
 def robots_txt():
     return Response("User-agent: *\nDisallow: /\n", mimetype="text/plain")
@@ -234,7 +305,15 @@ def current_actor_code():
         return None
     info = session.get("access_info") or {}
     code = str(info.get("code", "")).strip()
-    return code or None
+    if not code:
+        return None
+    if ADMIN_KEY and hmac.compare_digest(code, ADMIN_KEY):
+        return "root_admin"
+    area_code = str(info.get("area") or info.get("center") or "").strip()
+    if area_code in AREA_ADMIN_SPECS and area_admin_key_matches(area_code, code):
+        return f"area_admin:{area_code}"
+    fingerprint = hashlib.sha256(code.encode("utf-8")).hexdigest()[:12]
+    return f"access:{fingerprint}"
 
 
 def audit_log(action, detail="", plate=None):
@@ -267,10 +346,41 @@ def audit_log(action, detail="", plate=None):
         )
 
 
+def hash_admin_key(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", value.encode("utf-8"), salt, 180000)
+    return f"{salt.hex()}${digest.hex()}"
+
+
+def verify_admin_key(stored_hash, value):
+    try:
+        salt_hex, digest_hex = str(stored_hash or "").split("$", 1)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(digest_hex)
+        actual = hashlib.pbkdf2_hmac("sha256", str(value or "").strip().encode("utf-8"), salt, 180000)
+        return hmac.compare_digest(actual, expected)
+    except (TypeError, ValueError):
+        return False
+
+
+def key_hint(value):
+    value = str(value or "").strip()
+    if len(value) <= 4:
+        return "••••"
+    return f"{value[:2]}••••{value[-2:]}"
+
+
 def db_connect():
-    os.makedirs(os.path.dirname(DATA_DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DATA_DB_PATH)
+    os.makedirs(os.path.dirname(DATA_DB_PATH) or ".", exist_ok=True)
+    conn = sqlite3.connect(DATA_DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -343,7 +453,18 @@ def init_db():
                 code TEXT PRIMARY KEY,
                 plates TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                ttl_hours INTEGER NOT NULL
+                ttl_hours INTEGER NOT NULL,
+                issued_by TEXT,
+                issued_area TEXT
+            );
+            CREATE TABLE IF NOT EXISTS area_admin_accounts (
+                area_code TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                key_hash TEXT NOT NULL DEFAULT '',
+                key_hint TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS app_meta (
                 key TEXT PRIMARY KEY,
@@ -360,6 +481,47 @@ def init_db():
             );
             """
         )
+        access_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(access_codes)").fetchall()
+        }
+        if "issued_by" not in access_columns:
+            conn.execute("ALTER TABLE access_codes ADD COLUMN issued_by TEXT")
+        if "issued_area" not in access_columns:
+            conn.execute("ALTER TABLE access_codes ADD COLUMN issued_area TEXT")
+        stamp = now_vn().strftime("%Y-%m-%d %H:%M")
+        for area_code, spec in AREA_ADMIN_SPECS.items():
+            env_key = AREA_ADMIN_KEYS.get(area_code, "")
+            existing = conn.execute(
+                "SELECT key_hash, active FROM area_admin_accounts WHERE area_code = ?",
+                (area_code,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO area_admin_accounts
+                        (area_code, label, key_hash, key_hint, active, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        area_code,
+                        spec["label"],
+                        hash_admin_key(env_key),
+                        key_hint(env_key),
+                        1 if env_key else 0,
+                        stamp,
+                        stamp,
+                    ),
+                )
+            elif not existing["key_hash"] and env_key:
+                conn.execute(
+                    """
+                    UPDATE area_admin_accounts
+                    SET key_hash = ?, key_hint = ?, active = 1, updated_at = ?
+                    WHERE area_code = ?
+                    """,
+                    (hash_admin_key(env_key), key_hint(env_key), stamp, area_code),
+                )
         car_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(cars)").fetchall()
@@ -430,6 +592,16 @@ def init_db():
 
 def normalize_plate(value):
     return re.sub(r"\s+", "", str(value or "").strip().upper())
+
+
+def normalize_manufacture_year(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not re.fullmatch(r"\d{4}", text):
+        return ""
+    year = int(text)
+    return text if 1900 <= year <= now_vn().year + 1 else ""
 
 
 def normalize_vehicle_status(value):
@@ -627,7 +799,9 @@ def worksheet_df(name, columns=None):
                     code AS 'MaTruyCap',
                     plates AS 'BienSo',
                     created_at AS 'ThoiDiemCap',
-                    ttl_hours AS 'ThoiHanGio'
+                    ttl_hours AS 'ThoiHanGio',
+                    issued_by AS 'NguoiCap',
+                    issued_area AS 'DonViCap'
                 FROM access_codes
                 ORDER BY created_at DESC
                 """,
@@ -676,7 +850,7 @@ def load_data(keys=None):
         "xe": (SHEET_XE, XE_DATA_COLUMNS),
         "history": (SHEET_HISTORY, None),
         "next": (SHEET_NEXT, None),
-        "access": (SHEET_ACCESS, ["MaTruyCap", "BienSo", "ThoiDiemCap", "ThoiHanGio"]),
+        "access": (SHEET_ACCESS, ["MaTruyCap", "BienSo", "ThoiDiemCap", "ThoiHanGio", "NguoiCap", "DonViCap"]),
         "oil": (SHEET_OIL, None),
         "registration": (SHEET_REGISTRATION, None),
     }
@@ -710,6 +884,120 @@ def format_datetime_display(value):
 
 def gen_access_code(length=6):
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+
+def gen_area_admin_key():
+    return secrets.token_hex(8).upper()
+
+
+def area_admin_accounts():
+    init_db()
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT area_code, label, key_hint, active, created_at, updated_at
+            FROM area_admin_accounts
+            ORDER BY area_code
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def area_admin_account(area_code):
+    area_code = str(area_code or "").strip()
+    if area_code not in AREA_ADMIN_SPECS:
+        return None
+    init_db()
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM area_admin_accounts WHERE area_code = ?",
+            (area_code,),
+        ).fetchone()
+    return row
+
+
+def area_admin_key_matches(area_code, raw_key):
+    row = area_admin_account(area_code)
+    if row is not None:
+        return bool(row["active"] and verify_admin_key(row["key_hash"], raw_key))
+    fallback = AREA_ADMIN_KEYS.get(area_code, "")
+    return bool(fallback and hmac.compare_digest(fallback, str(raw_key or "").strip()))
+
+
+def rotate_area_admin_key(area_code):
+    area_code = str(area_code or "").strip()
+    spec = AREA_ADMIN_SPECS.get(area_code)
+    if not spec:
+        return None
+    new_key = gen_area_admin_key()
+    stamp = now_vn().strftime("%Y-%m-%d %H:%M")
+    init_db()
+    with db_connect() as conn:
+        conn.execute(
+            """
+            UPDATE area_admin_accounts
+            SET key_hash = ?, key_hint = ?, active = 1, updated_at = ?
+            WHERE area_code = ?
+            """,
+            (hash_admin_key(new_key), key_hint(new_key), stamp, area_code),
+        )
+    audit_log("rotate_area_admin", f"Đổi mã quản trị khu vực {spec['label']}")
+    return new_key
+
+
+def set_area_admin_active(area_code, active):
+    area_code = str(area_code or "").strip()
+    if area_code not in AREA_ADMIN_SPECS:
+        return False
+    init_db()
+    with db_connect() as conn:
+        result = conn.execute(
+            "UPDATE area_admin_accounts SET active = ?, updated_at = ? WHERE area_code = ?",
+            (1 if active else 0, now_vn().strftime("%Y-%m-%d %H:%M"), area_code),
+        )
+    if result.rowcount:
+        audit_log(
+            "toggle_area_admin",
+            f"{'Bật' if active else 'Tắt'} tài khoản quản trị {AREA_ADMIN_SPECS[area_code]['label']}",
+        )
+    return result.rowcount > 0
+
+
+def login_client_key():
+    return (request.remote_addr or "unknown").strip()[:120]
+
+
+def login_is_rate_limited():
+    now = time.monotonic()
+    with _login_failures_lock:
+        record = _login_failures.get(login_client_key())
+        if not record:
+            return False, 0
+        if now - record["last"] > LOGIN_FAILURE_WINDOW_SECONDS:
+            _login_failures.pop(login_client_key(), None)
+            return False, 0
+        if record.get("blocked_until", 0) > now:
+            return True, int(record["blocked_until"] - now) + 1
+        return False, 0
+
+
+def register_login_failure():
+    now = time.monotonic()
+    key = login_client_key()
+    with _login_failures_lock:
+        record = _login_failures.get(key)
+        if not record or now - record["last"] > LOGIN_FAILURE_WINDOW_SECONDS:
+            record = {"count": 0, "last": now, "blocked_until": 0}
+        record["count"] += 1
+        record["last"] = now
+        if record["count"] >= LOGIN_MAX_FAILURES:
+            record["blocked_until"] = now + LOGIN_LOCKOUT_SECONDS
+        _login_failures[key] = record
+
+
+def clear_login_failures():
+    with _login_failures_lock:
+        _login_failures.pop(login_client_key(), None)
 
 
 def parse_ttl_hours(value):
@@ -750,15 +1038,19 @@ def is_admin():
 def admin_actor_codes():
     codes = []
     if ADMIN_KEY:
-        codes.append(ADMIN_KEY)
+        codes.extend(["root_admin", ADMIN_KEY])
+    codes.extend(f"area_admin:{area_code}" for area_code in AREA_ADMIN_SPECS)
     codes.extend(key for key in AREA_ADMIN_KEYS.values() if key)
     return list(dict.fromkeys(codes))
 
 
 def admin_actor_label(code):
     code = str(code or "").strip()
-    if ADMIN_KEY and code == ADMIN_KEY:
+    if code == "root_admin" or (ADMIN_KEY and code == ADMIN_KEY):
         return "Quản trị cao nhất"
+    if code.startswith("area_admin:"):
+        area_code = code.split(":", 1)[1]
+        return f"Quản trị khu vực: {CENTER_FILTER_LABELS.get(area_code, area_code)}"
     for area_code, area_key in AREA_ADMIN_KEYS.items():
         if area_key and code == area_key:
             return f"Quản trị khu vực: {CENTER_FILTER_LABELS.get(area_code, area_code)}"
@@ -770,8 +1062,7 @@ def current_area_code():
     if not info or info.get("role") != "area_admin":
         return None
     area_code = str(info.get("area") or info.get("center") or "").strip()
-    area_key = AREA_ADMIN_KEYS.get(area_code, "")
-    if area_code not in AREA_ADMIN_SPECS or not area_key or info.get("code") != area_key:
+    if area_code not in AREA_ADMIN_SPECS or not area_admin_key_matches(area_code, info.get("code")):
         return None
     return area_code
 
@@ -1223,8 +1514,10 @@ def import_repair_records(upload, scope_plates):
         return False, "Vui lòng chọn file Excel sửa chữa."
     try:
         frame = pd.read_excel(upload, dtype=object)
-    except Exception as exc:
-        return False, f"Không đọc được file Excel: {exc}"
+    except Exception:
+        return False, "Không đọc được file Excel. Hãy kiểm tra đúng mẫu và định dạng file."
+    if len(frame.index) > MAX_IMPORT_ROWS or len(frame.columns) > MAX_IMPORT_COLUMNS:
+        return False, f"File vượt giới hạn {MAX_IMPORT_ROWS} dòng hoặc {MAX_IMPORT_COLUMNS} cột."
     plate_col = import_column(frame, ["Biển số", "Biển số xe", "Plate"])
     date_col = import_column(frame, ["Ngày sửa chữa", "Ngày", "Repair date"])
     content_col = import_column(frame, ["Nội dung sửa chữa", "Nội dung", "Repair content"])
@@ -1267,8 +1560,10 @@ def import_oil_records(upload, scope_plates):
         return False, "Vui lòng chọn file Excel thay dầu."
     try:
         frame = pd.read_excel(upload, dtype=object)
-    except Exception as exc:
-        return False, f"Không đọc được file Excel: {exc}"
+    except Exception:
+        return False, "Không đọc được file Excel. Hãy kiểm tra đúng mẫu và định dạng file."
+    if len(frame.index) > MAX_IMPORT_ROWS or len(frame.columns) > MAX_IMPORT_COLUMNS:
+        return False, f"File vượt giới hạn {MAX_IMPORT_ROWS} dòng hoặc {MAX_IMPORT_COLUMNS} cột."
     plate_col = import_column(frame, ["Biển số", "Biển số xe", "Plate"])
     date_col = import_column(frame, ["Ngày thay dầu", "Ngày", "Oil date"])
     current_col = import_column(frame, ["Số km khi thay dầu", "Số kilomet khi thay dầu", "Kilomet hiện tại", "Odometer"])
@@ -2195,23 +2490,25 @@ def build_next_service_logs(plate, limit=6):
     return items
 
 
-def create_access_code(plates, ttl_hours=ACCESS_TTL_HOURS):
+def create_access_code(plates, ttl_hours=ACCESS_TTL_HOURS, issued_area=None):
     code = gen_access_code()
     created_at = now_vn().strftime("%Y-%m-%d %H:%M")
     ttl_hours = parse_ttl_hours(ttl_hours)
+    issued_by = current_actor_code() or "system"
+    issued_area = issued_area or current_area_code() or MAIN_CENTER_CODE
     init_db()
     with db_connect() as conn:
         while conn.execute("SELECT 1 FROM access_codes WHERE code = ?", (code,)).fetchone():
             code = gen_access_code()
         conn.execute(
             """
-            INSERT INTO access_codes (code, plates, created_at, ttl_hours)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO access_codes (code, plates, created_at, ttl_hours, issued_by, issued_area)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (code, ",".join(plates), created_at, ttl_hours),
+            (code, ",".join(plates), created_at, ttl_hours, issued_by, issued_area),
         )
     clear_cache(SHEET_ACCESS)
-    audit_log("create_access_code", f"Tạo mã {code} cho {len(plates)} xe")
+    audit_log("create_access_code", f"Tạo mã truy cập cho {len(plates)} xe")
     return code, created_at
 
 
@@ -2221,7 +2518,7 @@ def revoke_access_code(code):
         result = conn.execute("DELETE FROM access_codes WHERE code = ?", (code,))
     clear_cache(SHEET_ACCESS)
     if result.rowcount > 0:
-        audit_log("revoke_access_code", f"Thu hồi mã {code}")
+        audit_log("revoke_access_code", "Thu hồi một mã truy cập")
     return result.rowcount > 0
 
 
@@ -2248,7 +2545,7 @@ def extend_access_code(code, extra_hours):
                 (now_vn().strftime("%Y-%m-%d %H:%M"), extra_hours, code),
             )
     clear_cache(SHEET_ACCESS)
-    audit_log("extend_access_code", f"Gia hạn mã {code} thêm {extra_hours} giờ")
+    audit_log("extend_access_code", f"Gia hạn một mã truy cập thêm {extra_hours} giờ")
     return True
 
 
@@ -2284,7 +2581,7 @@ def upsert_vehicle(plate, car_type, manufacture_year, status, parking_location="
             (
                 plate,
                 str(car_type or "").strip(),
-                str(manufacture_year or "").strip(),
+                normalize_manufacture_year(manufacture_year),
                 normalize_vehicle_status(status),
                 str(center or MAIN_CENTER_CODE).strip(),
                 parking_location,
@@ -2735,6 +3032,7 @@ BASE_TEMPLATE = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token_value() }}">
   <title>{{ title or 'Quản lý xe Vietinbank' }}</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-32.png') }}" sizes="32x32">
@@ -6365,6 +6663,20 @@ BASE_TEMPLATE = r"""
   </div>
   <script>
     (function () {
+      var token = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content");
+      if (!token) return;
+      document.querySelectorAll('form[method="post"], form:not([method])').forEach(function (form) {
+        if (form.querySelector('input[name="_csrf_token"]')) return;
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "_csrf_token";
+        input.value = token;
+        form.appendChild(input);
+      });
+    })();
+  </script>
+  <script>
+    (function () {
       var toggle = document.querySelector(".menu-toggle");
       var nav = document.getElementById("site-nav");
       if (!toggle || !nav) return;
@@ -6455,17 +6767,23 @@ def page(content, title="Quản lý xe Vietinbank", active="detail", login_page=
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
+        limited, retry_after = login_is_rate_limited()
+        if limited:
+            flash(f"Quá nhiều lần đăng nhập sai. Vui lòng thử lại sau {retry_after} giây.", "error")
+            return redirect(url_for("login"))
         code = request.form.get("code", "").strip()
         if ADMIN_KEY and code == ADMIN_KEY:
             session["access_info"] = {"code": ADMIN_KEY, "bien_so": "ALL", "cap_time": None}
             touch_last_activity()
+            clear_login_failures()
             audit_log("login", "Đăng nhập quản trị")
             return redirect(url_for("dashboard"))
 
-        for area_code, area_key in AREA_ADMIN_KEYS.items():
-            if area_key and code == area_key:
+        init_db()
+        for area_code in AREA_ADMIN_SPECS:
+            if area_admin_key_matches(area_code, code):
                 session["access_info"] = {
-                    "code": area_key,
+                    "code": code,
                     "bien_so": "ALL",
                     "cap_time": None,
                     "role": "area_admin",
@@ -6473,6 +6791,7 @@ def login():
                     "center": area_code,
                 }
                 touch_last_activity()
+                clear_login_failures()
                 audit_log("login", f"Đăng nhập quản trị {CENTER_FILTER_LABELS[area_code]}")
                 return redirect(url_for("dashboard"))
 
@@ -6494,8 +6813,11 @@ def login():
                     "ttl_hours": ttl_hours,
                 }
                 touch_last_activity()
+                clear_login_failures()
                 audit_log("login", f"Đăng nhập mã truy cập cho {row.iloc[0]['BienSo']}")
                 return redirect(url_for("dashboard"))
+
+        register_login_failure()
 
     content = render_template_string(
         r"""
@@ -9126,6 +9448,10 @@ def admin_data():
             vehicle_center = current_center_scope()
             if not is_center_admin() and request.form.get("form_mode") != "edit":
                 vehicle_center = center_filter if center_filter != CENTER_FILTER_ALL else MAIN_CENTER_CODE
+            manufacture_year = normalize_manufacture_year(request.form.get("manufacture_year", ""))
+            if request.form.get("manufacture_year", "").strip() and not manufacture_year:
+                flash("Năm sản xuất phải là năm hợp lệ gồm 4 chữ số.", "error")
+                return redirect(url_for("admin_data", tab="vehicles", mode=request.form.get("form_mode", ""), plate=plate, center=center_filter))
             parking_location = (
                 current_area_label()
                 if is_area_admin()
@@ -9134,7 +9460,7 @@ def admin_data():
             if upsert_vehicle(
                 plate,
                 request.form.get("car_type", ""),
-                request.form.get("manufacture_year", ""),
+                manufacture_year,
                 request.form.get("status", ""),
                 parking_location,
                 vehicle_center,
@@ -9536,7 +9862,7 @@ def admin_data():
               <div class="form-row">
                 <div class="field">
                   <label for="manufacture-year">Năm sản xuất</label>
-                  <input id="manufacture-year" name="manufacture_year" type="date" value="{{ date_input_value(car.get("Năm sản xuất", "")) }}">
+                  <input id="manufacture-year" name="manufacture_year" type="number" min="1900" max="{{ now_vn().year + 1 }}" inputmode="numeric" placeholder="VD: 2020" value="{{ normalize_manufacture_year(car.get("Năm sản xuất", "")) }}">
                 </div>
                 <div class="field">
                   <label for="status">Trạng thái</label>
@@ -10018,6 +10344,8 @@ def admin_data():
         date_input_value=date_input_value,
         format_short_date=format_short_date,
         format_money_input=format_money_input,
+        now_vn=now_vn,
+        normalize_manufacture_year=normalize_manufacture_year,
         normalize_history_cost_type=normalize_history_cost_type,
         normalize_plan_type=normalize_plan_type,
         root_admin=is_admin(),
@@ -10039,10 +10367,13 @@ def admin():
     center_filter = normalize_center_filter(requested_center)
     session["admin_center_filter"] = center_filter
     admin_view = request.args.get("view", "access")
-    if admin_view not in ("access", "audit"):
+    if admin_view not in ("access", "audit", "accounts"):
         admin_view = "access"
-    if admin_view == "audit" and not is_admin():
+    if admin_view in ("audit", "accounts") and not is_admin():
         return Response("Forbidden", status=403)
+    if admin_view == "accounts" and is_admin():
+        center_filter = CENTER_FILTER_ALL
+        session["admin_center_filter"] = center_filter
     data = load_data(["xe", "access"])
     data["xe"] = center_filtered_vehicle_df(scoped_vehicle_df(data["xe"]), center_filter)
     scope_plates = scoped_vehicle_plates(data, include_inactive=True)
@@ -10053,6 +10384,32 @@ def admin():
 
     if request.method == "POST":
         action = request.form.get("action")
+        if action == "rotate_area_admin":
+            if not is_admin():
+                return Response("Forbidden", status=403)
+            area_code = request.form.get("area_code", "").strip()
+            new_key = rotate_area_admin_key(area_code)
+            if new_key:
+                flash(
+                    f"Đã đổi mã quản trị {CENTER_FILTER_LABELS.get(area_code, area_code)}. Mã mới: {new_key}",
+                    "success",
+                )
+            else:
+                flash("Không tìm thấy tài khoản khu vực.", "error")
+            return redirect(url_for("admin", view="accounts"))
+        if action == "toggle_area_admin":
+            if not is_admin():
+                return Response("Forbidden", status=403)
+            area_code = request.form.get("area_code", "").strip()
+            active = request.form.get("active") == "1"
+            if set_area_admin_active(area_code, active):
+                flash(
+                    f"Đã {'bật' if active else 'tắt'} tài khoản {CENTER_FILTER_LABELS.get(area_code, area_code)}.",
+                    "success",
+                )
+            else:
+                flash("Không tìm thấy tài khoản khu vực.", "error")
+            return redirect(url_for("admin", view="accounts"))
         if action == "create":
             selected_plates = parse_plate_list(request.form.get("plates", ""))
             ttl_hours = parse_ttl_hours(request.form.get("ttl_hours", ACCESS_TTL_HOURS))
@@ -10062,7 +10419,11 @@ def admin():
             elif invalid_plates:
                 flash("Có biển số không hợp lệ.", "error")
             else:
-                code, created_at = create_access_code(selected_plates, ttl_hours)
+                code, created_at = create_access_code(
+                    selected_plates,
+                    ttl_hours,
+                    current_area_code() or (center_filter if center_filter != CENTER_FILTER_ALL else MAIN_CENTER_CODE),
+                )
                 flash(f"Đã tạo mã {code} cho {len(selected_plates)} xe, hiệu lực {ttl_hours} giờ.", "success")
         elif action == "revoke":
             code = request.form.get("code", "").strip()
@@ -10077,7 +10438,7 @@ def admin():
                 flash(f"Đã gia hạn mã {code} thêm {extra_hours} giờ.", "success")
             else:
                 flash("Mã không tồn tại hoặc nằm ngoài phạm vi quản lý.", "error")
-        return redirect(url_for("admin"))
+        return redirect(url_for("admin", view=admin_view, center=center_filter))
 
     access_rows = []
     if not data["access"].empty:
@@ -10098,12 +10459,15 @@ def admin():
                     "ttl": f'{parse_ttl_hours(row.get("ThoiHanGio", ACCESS_TTL_HOURS))} giờ',
                     "remaining": remaining_text(row.get("ThoiDiemCap", ""), row.get("ThoiHanGio", ACCESS_TTL_HOURS)),
                     "active": access_is_active(row.get("ThoiDiemCap", ""), row.get("ThoiHanGio", ACCESS_TTL_HOURS)),
+                    "issuer": admin_actor_label(row.get("NguoiCap", "")) if row.get("NguoiCap") else "Trước đây",
+                    "issued_area": CENTER_FILTER_LABELS.get(str(row.get("DonViCap", "")), ""),
                     "sort_time": parse_cap_time_safe(row.get("ThoiDiemCap", "")),
                 }
             )
     access_rows = sorted(access_rows, key=lambda item: item["sort_time"], reverse=True)
 
     audit_rows = []
+    area_accounts = area_admin_accounts() if is_admin() else []
     audit_query = request.args.get("audit_q", "").strip()
     audit_actor = request.args.get("audit_actor", "").strip()
     audit_action = request.args.get("audit_action", "").strip()
@@ -10183,7 +10547,7 @@ def admin():
         r"""
         <section class="hero">
           <div>
-            <h1>{{ 'Lịch sử truy cập' if admin_view == 'audit' else 'Quản lý mã truy cập' }}</h1>
+            <h1>{{ 'Lịch sử truy cập' if admin_view == 'audit' else ('Quản lý tài khoản khu vực' if admin_view == 'accounts' else 'Quản lý mã truy cập') }}</h1>
           </div>
           {% if root_admin %}
             <div class="toolbar center-filter-toolbar">
@@ -10209,6 +10573,9 @@ def admin():
                 Quản lý mã truy cập
               </a>
               {% if root_admin %}
+                <a class="{{ 'active' if admin_view == 'accounts' else '' }}" href="{{ url_for('admin', view='accounts') }}">
+                  Tài khoản khu vực
+                </a>
                 <a class="{{ 'active' if admin_view == 'audit' else '' }}" href="{{ url_for('admin', view='audit', center=center_filter) }}">
                   Lịch sử thao tác
                 </a>
@@ -10473,6 +10840,92 @@ def admin():
             {% endif %}
           </section>
 
+          {% elif admin_view == 'accounts' %}
+          <section class="panel admin-management-panel">
+            <div class="section-head">
+              <div>
+                <h2>Tài khoản quản trị khu vực</h2>
+                <p class="subtle">Admin tổng có thể đổi mã, bật/tắt tài khoản và xem đơn vị cấp mã người dùng.</p>
+              </div>
+              <span class="badge">{{ area_accounts|length }} khu vực</span>
+            </div>
+            <div class="access-code-list">
+              {% for account in area_accounts %}
+                <article class="access-code-card {{ 'active' if account.active else 'expired' }}">
+                  <div class="access-code-main">
+                    <span class="access-code-label">Đơn vị</span>
+                    <strong class="access-code-value">{{ account.label }}</strong>
+                    <span class="status-pill {{ 'active' if account.active else 'expired' }}">{{ 'Đang hoạt động' if account.active else 'Đang tắt' }}</span>
+                  </div>
+                  <div class="access-code-meta">
+                    <span class="access-code-label">Mã hiện tại</span>
+                    <strong class="access-code-value code">{{ account.key_hint or 'Chưa cấp mã' }}</strong>
+                    <span class="subtle">Cập nhật {{ format_datetime_display(account.updated_at) }}</span>
+                  </div>
+                  <div class="access-card-actions">
+                    <form method="post">
+                      <input type="hidden" name="action" value="rotate_area_admin">
+                      <input type="hidden" name="area_code" value="{{ account.area_code }}">
+                      <button class="btn primary" type="submit" onclick="return confirm('Đổi mã đăng nhập tài khoản này? Mã cũ sẽ mất hiệu lực.')">Đổi mã</button>
+                    </form>
+                    <form method="post">
+                      <input type="hidden" name="action" value="toggle_area_admin">
+                      <input type="hidden" name="area_code" value="{{ account.area_code }}">
+                      <input type="hidden" name="active" value="{{ '0' if account.active else '1' }}">
+                      <button class="btn {{ 'danger' if account.active else 'primary' }}" type="submit">{{ 'Tắt tài khoản' if account.active else 'Bật tài khoản' }}</button>
+                    </form>
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+          </section>
+          <section class="panel admin-management-panel">
+            <div class="section-head">
+              <div>
+                <h2>Mã truy cập do các khu vực cấp</h2>
+                <p class="subtle">Danh sách bên dưới hiển thị người cấp và đơn vị cấp; admin tổng có thể gia hạn hoặc thu hồi.</p>
+              </div>
+              <span class="badge">{{ access_rows|length }} mã</span>
+            </div>
+            {% if access_rows %}
+              <div class="access-code-list">
+                {% for row in access_rows %}
+                  <article class="access-code-card {{ 'active' if row.active else 'expired' }}">
+                    <div class="access-code-main">
+                      <span class="access-code-label">Mã truy cập</span>
+                      <strong class="access-code-value code">{{ row.code }}</strong>
+                      <span class="status-pill {{ 'active' if row.active else 'expired' }}">{{ 'Còn hạn' if row.active else 'Hết hạn' }}</span>
+                    </div>
+                    <div class="access-code-meta">
+                      <span class="access-code-label">Đơn vị cấp</span>
+                      <strong class="access-code-value">{{ row.issued_area or 'Hội sở' }}</strong>
+                      <span class="subtle">{{ row.issuer }}</span>
+                    </div>
+                    <div class="access-code-status">
+                      <span class="access-code-label">Xe được cấp quyền</span>
+                      <strong class="access-code-value access-code-plate">{{ row.plate }}</strong>
+                      <span class="subtle">Cấp lúc {{ row.created }} · {{ row.ttl }}</span>
+                    </div>
+                    <div class="access-card-actions">
+                      <form method="post">
+                        <input type="hidden" name="action" value="extend">
+                        <input type="hidden" name="code" value="{{ row.code }}">
+                        <input name="extra_hours" type="number" min="1" max="720" value="24" aria-label="Số giờ gia hạn">
+                        <button class="btn primary" type="submit">Gia hạn</button>
+                      </form>
+                      <form method="post">
+                        <input type="hidden" name="action" value="revoke">
+                        <input type="hidden" name="code" value="{{ row.code }}">
+                        <button class="btn danger" type="submit">Thu hồi</button>
+                      </form>
+                    </div>
+                  </article>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="empty">Chưa có mã truy cập.</div>
+            {% endif %}
+          </section>
           {% else %}
           <section class="panel admin-management-panel">
             <div class="section-head">
@@ -10527,6 +10980,7 @@ def admin():
         plates=plates,
         plate_labels=plate_labels,
         access_rows=access_rows,
+        area_accounts=area_accounts,
         audit_rows=audit_rows,
         audit_query=audit_query,
         audit_actor=audit_actor,
@@ -10541,6 +10995,7 @@ def admin():
         center_filter=center_filter,
         center_filter_label=CENTER_FILTER_LABELS.get(center_filter, CENTER_FILTER_LABELS[CENTER_FILTER_ALL]),
         center_filters=CENTER_FILTER_LABELS,
+        format_datetime_display=format_datetime_display,
     )
     return page(content, title="Quản lý mã", active="admin")
 

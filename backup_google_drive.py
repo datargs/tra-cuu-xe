@@ -29,7 +29,7 @@ RCLONE_CONFIG = Path(
 REMOTE_PATH = os.getenv(
     "TRACUUXE_BACKUP_REMOTE", "gdrive:VIBE_CODE_AUTOBACKUP"
 ).rstrip("/")
-KEEP_LATEST = int(os.getenv("TRACUUXE_BACKUP_KEEP_LATEST", "2"))
+KEEP_LATEST = int(os.getenv("TRACUUXE_BACKUP_KEEP_LATEST", "7"))
 
 # Runtime and backup material must not be copied into a new snapshot.
 SKIP_DIRS = {

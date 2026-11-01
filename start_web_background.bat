@@ -2,19 +2,25 @@
 setlocal
 
 cd /d "%~dp0"
+set "RUNTIME_DIR=%~dp0runtime"
+set "PID_FILE=%RUNTIME_DIR%\web.pid"
+set "WEB_RUNNER=%~dp0run_web_process.ps1"
 
-set HOST=127.0.0.1
-set PORT=8501
+if not exist "%RUNTIME_DIR%" mkdir "%RUNTIME_DIR%" >nul 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop_web_process.ps1"
+if exist "%PID_FILE%" (
+    for /f "usebackq delims=" %%P in ("%PID_FILE%") do taskkill /PID %%P /T /F >nul 2>&1
+    del /f /q "%PID_FILE%" >nul 2>&1
+)
 
-echo Stopping old web process on port %PORT%...
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
-    taskkill /PID %%P /F >nul 2>&1
+if not exist "%~dp0venv\Scripts\python.exe" (
+    echo ERROR: Virtual environment Python was not found.
+    exit /b 1
 )
 
 echo Starting TraCuuXe web in background...
-start "TraCuuXe Web" /min python -m waitress --listen=%HOST%:%PORT% --threads=8 app:app
-
-timeout /t 5 >nul
+start "TraCuuXe Web" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%WEB_RUNNER%"
+powershell.exe -NoProfile -Command "Start-Sleep -Seconds 5"
 
 tasklist /FI "IMAGENAME eq cloudflared.exe" | find /I "cloudflared.exe" >nul
 if errorlevel 1 (

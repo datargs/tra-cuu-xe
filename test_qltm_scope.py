@@ -16,9 +16,28 @@ os.environ["TRACUUXE_CUANAM_ADMIN_KEY"] = "CUANAM-TEST-KEY"
 import app
 
 
+def login(client, code):
+    client.get("/login")
+    with client.session_transaction() as flask_session:
+        token = flask_session[app.CSRF_SESSION_KEY]
+    return client.post("/login", data={"code": code, "_csrf_token": token})
+
+
+def post(client, path, data=None, **kwargs):
+    with client.session_transaction() as flask_session:
+        token = flask_session[app.CSRF_SESSION_KEY]
+    payload = dict(data or {})
+    payload.setdefault("_csrf_token", token)
+    return client.post(path, data=payload, **kwargs)
+
+
 class AreaScopeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        app.DATA_DB_PATH = TEST_DB
+        app.ADMIN_KEY = "ROOT-TEST-KEY"
+        app.AREA_ADMIN_KEYS = {area_code: "" for area_code in app.AREA_ADMIN_SPECS}
+        app.AREA_ADMIN_KEYS["cua_nam"] = "CUANAM-TEST-KEY"
         app.init_db()
         app.upsert_vehicle(
             "30A-111.11",
@@ -47,7 +66,7 @@ class AreaScopeTest(unittest.TestCase):
 
     def setUp(self):
         self.client = app.app.test_client()
-        response = self.client.post("/login", data={"code": "CUANAM-TEST-KEY"})
+        response = login(self.client, "CUANAM-TEST-KEY")
         self.assertEqual(response.status_code, 302)
 
     def test_center_admin_sees_only_center_vehicles(self):
@@ -68,13 +87,14 @@ class AreaScopeTest(unittest.TestCase):
         self.assertNotIn(b'id="parking-location"', area_form.data)
 
         root_client = app.app.test_client()
-        self.assertEqual(root_client.post("/login", data={"code": "ROOT-TEST-KEY"}).status_code, 302)
+        self.assertEqual(login(root_client, "ROOT-TEST-KEY").status_code, 302)
         root_form = root_client.get("/admin/data?tab=vehicles&mode=add")
         self.assertEqual(root_form.status_code, 200)
         self.assertIn(b'id="parking-location"', root_form.data)
 
     def test_center_admin_can_create_code_only_for_center_vehicles(self):
-        response = self.client.post(
+        response = post(
+            self.client,
             "/admin",
             data={
                 "action": "create",
@@ -99,7 +119,8 @@ class AreaScopeTest(unittest.TestCase):
             before_count = before.execute("SELECT COUNT(*) FROM access_codes").fetchone()[0]
         finally:
             before.close()
-        response = self.client.post(
+        response = post(
+            self.client,
             "/admin",
             data={
                 "action": "create",
@@ -116,7 +137,8 @@ class AreaScopeTest(unittest.TestCase):
         self.assertEqual(after_count, before_count)
 
     def test_center_admin_cannot_modify_main_vehicle(self):
-        response = self.client.post(
+        response = post(
+            self.client,
             "/admin/data",
             data={"action": "deactivate_vehicle", "plate": "30B-222.22"},
         )
@@ -131,7 +153,8 @@ class AreaScopeTest(unittest.TestCase):
         self.assertEqual(row["status"], app.VEHICLE_STATUS_ACTIVE)
 
     def test_center_admin_forces_parking_location_to_own_center(self):
-        response = self.client.post(
+        response = post(
+            self.client,
             "/admin/data",
             data={
                 "action": "save_vehicle",
@@ -158,7 +181,7 @@ class AreaScopeTest(unittest.TestCase):
 
     def test_root_admin_can_switch_between_two_centers(self):
         client = app.app.test_client()
-        response = client.post("/login", data={"code": "ROOT-TEST-KEY"})
+        response = login(client, "ROOT-TEST-KEY")
         self.assertEqual(response.status_code, 302)
 
         main_page = client.get("/admin/data?center=main")
@@ -186,10 +209,11 @@ class AreaScopeTest(unittest.TestCase):
 
     def test_root_admin_can_create_vehicle_in_selected_center(self):
         client = app.app.test_client()
-        response = client.post("/login", data={"code": "ROOT-TEST-KEY"})
+        response = login(client, "ROOT-TEST-KEY")
         self.assertEqual(response.status_code, 302)
 
-        response = client.post(
+        response = post(
+            client,
             "/admin/data",
             data={
                 "action": "save_vehicle",
@@ -218,10 +242,11 @@ class AreaScopeTest(unittest.TestCase):
 
     def test_root_admin_defaults_parking_location_to_head_office(self):
         client = app.app.test_client()
-        response = client.post("/login", data={"code": "ROOT-TEST-KEY"})
+        response = login(client, "ROOT-TEST-KEY")
         self.assertEqual(response.status_code, 302)
 
-        response = client.post(
+        response = post(
+            client,
             "/admin/data",
             data={
                 "action": "save_vehicle",
@@ -246,6 +271,35 @@ class AreaScopeTest(unittest.TestCase):
         self.assertIsNotNone(created)
         self.assertEqual(created["center"], app.MAIN_CENTER_CODE)
         self.assertEqual(created["parking_location"], "Hội sở")
+
+    def test_root_admin_can_manage_area_accounts_and_view_issuers(self):
+        root_client = app.app.test_client()
+        self.assertEqual(login(root_client, "ROOT-TEST-KEY").status_code, 302)
+        response = root_client.get("/admin?view=accounts")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Tài khoản quản trị khu vực".encode("utf-8"), response.data)
+        self.assertIn("Bắc Ninh".encode("utf-8"), response.data)
+
+        rotate_response = post(
+            root_client,
+            "/admin?view=accounts",
+            {"action": "rotate_area_admin", "area_code": "bac_ninh"},
+        )
+        self.assertEqual(rotate_response.status_code, 302)
+        with app.db_connect() as conn:
+            row = conn.execute(
+                "SELECT active, key_hash FROM area_admin_accounts WHERE area_code = 'bac_ninh'"
+            ).fetchone()
+        self.assertEqual(row["active"], 1)
+        self.assertTrue(row["key_hash"])
+
+        area_client = app.app.test_client()
+        self.assertEqual(login(area_client, "CUANAM-TEST-KEY").status_code, 302)
+        self.assertEqual(area_client.get("/admin?view=accounts").status_code, 403)
+
+    def test_post_without_csrf_is_rejected(self):
+        client = app.app.test_client()
+        self.assertEqual(client.post("/login", data={"code": "ROOT-TEST-KEY"}).status_code, 400)
 
 
 if __name__ == "__main__":

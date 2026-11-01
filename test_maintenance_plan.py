@@ -17,9 +17,20 @@ os.environ["TRACUUXE_CUANAM_ADMIN_KEY"] = "CUANAM-PLAN-TEST"
 import app
 
 
+def login(client, code):
+    client.get("/login")
+    with client.session_transaction() as flask_session:
+        token = flask_session[app.CSRF_SESSION_KEY]
+    return client.post("/login", data={"code": code, "_csrf_token": token})
+
+
 class MaintenancePlanTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        app.DATA_DB_PATH = TEST_DB
+        app.ADMIN_KEY = "ROOT-PLAN-TEST"
+        app.AREA_ADMIN_KEYS = {area_code: "" for area_code in app.AREA_ADMIN_SPECS}
+        app.AREA_ADMIN_KEYS["cua_nam"] = "CUANAM-PLAN-TEST"
         app.init_db()
         app.upsert_vehicle("30C-333.33", "Plan Test", "2024", app.VEHICLE_STATUS_ACTIVE, "", app.MAIN_CENTER_CODE)
 
@@ -103,7 +114,7 @@ class MaintenancePlanTest(unittest.TestCase):
 
     def test_detail_and_admin_maintenance_pages_render(self):
         client = app.app.test_client()
-        response = client.post("/login", data={"code": "ROOT-PLAN-TEST"})
+        response = login(client, "ROOT-PLAN-TEST")
         self.assertEqual(response.status_code, 302)
         list_response = client.get("/detail")
         list_body = list_response.get_data(as_text=True)
@@ -121,7 +132,7 @@ class MaintenancePlanTest(unittest.TestCase):
 
     def test_maintenance_alerts_page_lists_update_popup(self):
         client = app.app.test_client()
-        response = client.post("/login", data={"code": "ROOT-PLAN-TEST"})
+        response = login(client, "ROOT-PLAN-TEST")
         self.assertEqual(response.status_code, 302)
         today = app.now_vn().date().isoformat()
         with app.db_connect() as conn:

@@ -8,8 +8,10 @@ $logDir = Join-Path $repo "logs"
 $logPath = Join-Path $logDir "deploy_server.log"
 $python = Join-Path $repo "venv\Scripts\python.exe"
 $startScript = Join-Path $repo "start_web_background.bat"
+$runtimeDir = Join-Path $repo "runtime"
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 
 function Write-DeployLog {
     param([string]$Message)
@@ -95,7 +97,7 @@ try {
 
     Start-Sleep -Seconds 5
     try {
-        $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8501/login" -TimeoutSec 10
+        $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8501/healthz" -TimeoutSec 10
         Write-DeployLog "Health check returned HTTP $($health.StatusCode)"
     } catch {
         Write-DeployLog "Health check failed: $($_.Exception.Message)"

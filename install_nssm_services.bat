@@ -16,34 +16,20 @@ if not exist "%NSSM%" (
     exit /b 1
 )
 
-set "PYTHON_EXE="
-for %%P in (
-    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
-) do (
-    if not defined PYTHON_EXE if exist "%%~P" set "PYTHON_EXE=%%~P"
-)
-
-if not defined PYTHON_EXE (
-    for /f "delims=" %%P in ('where python 2^>nul') do (
-        if not defined PYTHON_EXE set "PYTHON_EXE=%%P"
-    )
-)
+set "PYTHON_EXE=%APP_DIR%\venv\Scripts\python.exe"
 
 if not defined PYTHON_EXE (
     echo ERROR: Python was not found.
     exit /b 1
 )
 
+if not exist "%PYTHON_EXE%" (
+    echo ERROR: Virtual environment Python was not found at %PYTHON_EXE%
+    exit /b 1
+)
 if not exist "%APP_DIR%\logs" mkdir "%APP_DIR%\logs"
 
 echo Using Python: %PYTHON_EXE%
-echo Stopping any old web process on port %PORT%...
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
-    taskkill /PID %%P /F >nul 2>&1
-)
-
 echo Installing/updating %WEB_SERVICE%...
 
 sc query "%WEB_SERVICE%" >nul 2>&1

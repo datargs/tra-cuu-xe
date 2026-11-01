@@ -12,6 +12,9 @@ class VehicleRecordRulesTest(unittest.TestCase):
         import app as vehicle_app
 
         cls.app = vehicle_app
+        vehicle_app.DATA_DB_PATH = os.environ["TRACUUXE_DB_PATH"]
+        vehicle_app.ADMIN_KEY = "test-admin"
+        vehicle_app.AREA_ADMIN_KEYS = {area_code: "" for area_code in vehicle_app.AREA_ADMIN_SPECS}
         vehicle_app.init_db()
         vehicle_app.upsert_vehicle("30A-123.45", "Camry", "2020", vehicle_app.VEHICLE_STATUS_ACTIVE)
 
