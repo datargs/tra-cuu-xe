@@ -10818,10 +10818,52 @@ def admin():
 
           {% elif admin_view == 'accounts' %}
           <style>
-            .area-admin-key-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; }
-            .area-admin-key-form { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
-            .area-admin-key-form input { min-width:230px; }
-            .area-admin-key-help { width:100%; }
+            .area-admin-card {
+              grid-template-columns: minmax(160px, .8fr) minmax(180px, .8fr) minmax(430px, 1.4fr);
+              gap: 10px 18px;
+              padding: 11px 14px;
+            }
+            .area-admin-card .access-card-actions {
+              grid-column: 3;
+              grid-row: 1;
+              width: 100%;
+              justify-self: stretch;
+              display: grid;
+              grid-template-columns: minmax(0, 1fr) auto auto;
+              gap: 6px;
+              align-items: end;
+              padding-top: 0;
+            }
+            .area-admin-card .area-admin-key-form {
+              display: grid;
+              grid-template-columns: minmax(0, 1fr) auto;
+              gap: 6px;
+              align-items: center;
+            }
+            .area-admin-card .area-admin-key-form input { min-width: 0; width: 100%; }
+            .area-admin-card .area-admin-key-help {
+              grid-column: 1 / -1;
+              width: auto;
+              font-size: 11px;
+              line-height: 1.2;
+            }
+            .area-admin-card .access-card-actions > form:not(.area-admin-key-form) { align-self: end; }
+            .area-admin-card .access-card-actions > form:not(.area-admin-key-form) .btn { width: auto; min-width: 112px; }
+            .area-admin-card .access-card-actions .btn { min-height: 36px; }
+            @media (max-width: 1100px) {
+              .area-admin-card { grid-template-columns: minmax(150px, .8fr) minmax(180px, 1fr); }
+              .area-admin-card .access-card-actions {
+                grid-column: 1 / -1;
+                grid-row: auto;
+              }
+            }
+            @media (max-width: 820px) {
+              .area-admin-card { grid-template-columns: 1fr; }
+              .area-admin-card .access-card-actions { display: flex; flex-wrap: wrap; }
+              .area-admin-card .area-admin-key-form { display: flex; flex: 1 1 100%; flex-wrap: wrap; }
+              .area-admin-card .area-admin-key-form input { min-width: 220px; flex: 1 1 220px; }
+              .area-admin-card .area-admin-key-help { flex: 1 1 100%; }
+            }
           </style>
           <section class="panel admin-management-panel">
             <div class="section-head">
@@ -10833,7 +10875,7 @@ def admin():
             </div>
             <div class="access-code-list">
               {% for account in area_accounts %}
-                <article class="access-code-card {{ 'active' if account.active else 'expired' }}">
+                <article class="access-code-card area-admin-card {{ 'active' if account.active else 'expired' }}">
                   <div class="access-code-main">
                     <span class="access-code-label">Đơn vị</span>
                     <strong class="access-code-value">{{ account.label }}</strong>
