@@ -6324,7 +6324,7 @@ BASE_TEMPLATE = r"""
         <a class="{{ 'active' if active == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}">Dashboard</a>
         <a class="{{ 'active' if active == 'detail' else '' }}" href="{{ url_for('detail') }}">Chi tiết</a>
         {% if can_manage_data %}
-          <a class="{{ 'active' if active in ['data', 'admin'] else '' }}" href="{{ url_for('admin_data') }}">{{ management_label if is_center_admin else 'Quản trị' }}</a>
+          <a class="{{ 'active' if active in ['data', 'admin'] else '' }}" href="{{ url_for('admin_data') }}">Quản trị</a>
         {% endif %}
         {% if plan_alerts %}
           <a class="plan-reminder" href="{{ url_for('maintenance_alerts') }}" title="Xem danh sách kế hoạch dự kiến chưa cập nhật thực tế">
