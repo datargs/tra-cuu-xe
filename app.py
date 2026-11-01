@@ -3,6 +3,7 @@ from functools import wraps
 from io import BytesIO
 import hashlib
 import hmac
+import html
 import os
 import random
 import re
@@ -4124,18 +4125,68 @@ BASE_TEMPLATE = r"""
     tr:last-child td { border-bottom: 0; }
     tbody tr:hover { background: #fbfdff; }
     .cost { white-space: nowrap; font-weight: 700; }
-    .messages { display: grid; gap: 8px; margin-bottom: 16px; }
+    .messages {
+      position: fixed;
+      top: 84px;
+      right: 20px;
+      z-index: 1200;
+      display: grid;
+      gap: 8px;
+      width: min(420px, calc(100vw - 40px));
+      margin: 0;
+      pointer-events: none;
+    }
     .message {
-      padding: 11px 13px;
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 38px 12px 14px;
       border-radius: 8px;
       background: #edf8f1;
       color: var(--ok);
       border: 1px solid #c9ead5;
+      box-shadow: 0 12px 30px rgba(0, 43, 88, .16);
+      pointer-events: auto;
+      animation: toast-in .2s ease-out;
+    }
+    .message > span { flex: 1; line-height: 1.4; }
+    .message-close {
+      position: absolute;
+      top: 7px;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: currentColor;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      opacity: .7;
+    }
+    .message-close:hover { opacity: 1; background: rgba(0, 43, 88, .08); }
+    .message.toast-hiding { animation: toast-out .2s ease-in forwards; }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes toast-out {
+      from { opacity: 1; transform: translateY(0); }
+      to { opacity: 0; transform: translateY(-8px); }
     }
     .message.error {
       background: #fff0f0;
       color: var(--danger);
       border-color: #efc9c9;
+    }
+    @media (max-width: 820px) {
+      .messages {
+        top: 76px;
+        right: 12px;
+        width: calc(100vw - 24px);
+      }
     }
     .empty {
       color: var(--muted);
@@ -6680,6 +6731,26 @@ BASE_TEMPLATE = r"""
   </script>
   <script>
     (function () {
+      document.querySelectorAll("[data-toast]").forEach(function (toast) {
+        var timer = null;
+        var dismissed = false;
+
+        function dismiss() {
+          if (dismissed) return;
+          dismissed = true;
+          if (timer) clearTimeout(timer);
+          toast.classList.add("toast-hiding");
+          setTimeout(function () { toast.remove(); }, 220);
+        }
+
+        var closeButton = toast.querySelector("[data-toast-close]");
+        if (closeButton) closeButton.addEventListener("click", dismiss);
+        timer = setTimeout(dismiss, 4500);
+      });
+    })();
+  </script>
+  <script>
+    (function () {
       var timeoutMs = {{ inactivity_timeout_ms|default(900000) }};
       var logoutUrl = {{ logout_url|tojson }};
       var timer = null;
@@ -6708,7 +6779,14 @@ BASE_TEMPLATE = r"""
 def flash_messages():
     rows = []
     for category, message in list(get_flashed_messages_with_categories()):
-        rows.append(f'<div class="message {category}">{message}</div>')
+        safe_category = html.escape(str(category or "message"), quote=True)
+        safe_message = html.escape(str(message or ""))
+        rows.append(
+            f'<div class="message {safe_category}" role="alert" data-toast>'
+            f'<span>{safe_message}</span>'
+            '<button class="message-close" type="button" data-toast-close aria-label="Đóng">&times;</button>'
+            '</div>'
+        )
     return f'<div class="messages">{"".join(rows)}</div>' if rows else ""
 
 
