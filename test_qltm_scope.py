@@ -69,7 +69,9 @@ class AreaScopeTest(unittest.TestCase):
         self.assertNotIn(b"30B-222.22", response.data)
 
     def test_center_admin_can_manage_data_but_not_root_admin(self):
-        self.assertEqual(self.client.get("/admin/data").status_code, 200)
+        data_page = self.client.get("/admin/data")
+        self.assertEqual(data_page.status_code, 200)
+        self.assertNotIn("Tài khoản khu vực".encode("utf-8"), data_page.data)
         response = self.client.get("/admin")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"30A-111.11", response.data)
@@ -84,6 +86,7 @@ class AreaScopeTest(unittest.TestCase):
         root_form = root_client.get("/admin/data?tab=vehicles&mode=add")
         self.assertEqual(root_form.status_code, 200)
         self.assertIn(b'id="parking-location"', root_form.data)
+        self.assertIn("Tài khoản khu vực".encode("utf-8"), root_form.data)
 
     def test_center_admin_can_create_code_only_for_center_vehicles(self):
         response = post(
