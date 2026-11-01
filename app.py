@@ -71,7 +71,7 @@ CENTER_FILTER_LABELS = {
     **{area_code: spec["label"] for area_code, spec in AREA_ADMIN_SPECS.items()},
 }
 PARKING_LOCATION_OPTIONS = [
-    "Trụ sở",
+    "Hội sở",
     "Cửa Nam",
     "Bắc Hà Nội",
     "Tây Hà Nội",
@@ -79,6 +79,11 @@ PARKING_LOCATION_OPTIONS = [
     "Hải Phòng",
     "Bắc Ninh",
 ]
+
+
+def default_parking_location(center):
+    center_code = str(center or MAIN_CENTER_CODE).strip() or MAIN_CENTER_CODE
+    return CENTER_FILTER_LABELS.get(center_code, CENTER_FILTER_LABELS[MAIN_CENTER_CODE])
 
 SHEET_XE = "Xe"
 SHEET_HISTORY = "Lịch sử bảo dưỡng"
@@ -367,6 +372,18 @@ def init_db():
             "UPDATE cars SET center = ? WHERE center IS NULL OR TRIM(center) = ''",
             (MAIN_CENTER_CODE,),
         )
+        for center_code, location in {
+            MAIN_CENTER_CODE: CENTER_FILTER_LABELS[MAIN_CENTER_CODE],
+            **{area_code: spec["label"] for area_code, spec in AREA_ADMIN_SPECS.items()},
+        }.items():
+            conn.execute(
+                """
+                UPDATE cars
+                SET parking_location = ?
+                WHERE center = ? AND (parking_location IS NULL OR TRIM(parking_location) = '')
+                """,
+                (location, center_code),
+            )
         history_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(service_history)").fetchall()
@@ -2250,6 +2267,8 @@ def upsert_vehicle(plate, car_type, manufacture_year, status, parking_location="
         parking_location = str(parking_location or "").strip()
         if not parking_location and existing:
             parking_location = str(existing["parking_location"] or "").strip()
+        if not parking_location:
+            parking_location = default_parking_location(center)
         conn.execute(
             """
             INSERT INTO cars (plate, car_type, manufacture_year, status, center, parking_location, updated_at)
@@ -9105,7 +9124,7 @@ def admin_data():
             parking_location = (
                 current_area_label()
                 if is_area_admin()
-                else request.form.get("parking_location", "")
+                else request.form.get("parking_location", "") or default_parking_location(vehicle_center)
             )
             if upsert_vehicle(
                 plate,
@@ -9375,7 +9394,7 @@ def admin_data():
     parking_location = (
         current_area_label()
         if area_admin
-        else str(car.get(CAR_LOCATION_COLUMN, "") or "").strip()
+        else str(car.get(CAR_LOCATION_COLUMN, "") or "").strip() or default_parking_location(car.get(CAR_CENTER_COLUMN))
     )
     parking_location_options = [parking_location] if area_admin else list(PARKING_LOCATION_OPTIONS)
     if parking_location and parking_location not in parking_location_options:
@@ -9388,11 +9407,13 @@ def admin_data():
             continue
         next_row = data["next"][data["next"]["Biển số"].astype(str) == plate_value]
         next_due = next_row.iloc[0].get("Dự kiến lần tiếp theo", "") if not next_row.empty else ""
+        parking_center = row.get(CAR_CENTER_COLUMN, MAIN_CENTER_CODE)
+        parking_location_value = str(row.get(CAR_LOCATION_COLUMN, "") or "").strip() or default_parking_location(parking_center)
         vehicle_rows.append(
             {
                 "plate": plate_value,
                 "car_type": row.get("Loại xe", ""),
-                "location": row.get(CAR_LOCATION_COLUMN, ""),
+                "location": parking_location_value,
                 "year": normalize_year(row.get("Năm sản xuất")),
                 "status": normalize_vehicle_status(row.get("Trạng thái", "")),
                 "next_due": next_due or "Chưa cập nhật",
@@ -9500,7 +9521,6 @@ def admin_data():
               <div class="field">
                 <label for="parking-location">Địa điểm xe đỗ</label>
                 <select id="parking-location" name="parking_location">
-                  <option value="">Chưa cập nhật</option>
                   {% for location in parking_location_options %}
                     <option value="{{ location }}" {{ 'selected' if parking_location == location else '' }}>{{ location }}</option>
                   {% endfor %}

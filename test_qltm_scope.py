@@ -206,6 +206,37 @@ class AreaScopeTest(unittest.TestCase):
         self.assertEqual(created["center"], "cua_nam")
         self.assertEqual(created["parking_location"], "Hải Phòng")
 
+    def test_root_admin_defaults_parking_location_to_head_office(self):
+        client = app.app.test_client()
+        response = client.post("/login", data={"code": "ROOT-TEST-KEY"})
+        self.assertEqual(response.status_code, 302)
+
+        response = client.post(
+            "/admin/data",
+            data={
+                "action": "save_vehicle",
+                "form_mode": "create",
+                "plate": "30D-444.44",
+                "car_type": "Root Default Location Test",
+                "manufacture_year": "2025",
+                "status": app.VEHICLE_STATUS_ACTIVE,
+                "center": app.MAIN_CENTER_CODE,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        conn = app.db_connect()
+        try:
+            created = conn.execute(
+                "SELECT center, parking_location FROM cars WHERE plate = ?",
+                ("30D-444.44",),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(created)
+        self.assertEqual(created["center"], app.MAIN_CENTER_CODE)
+        self.assertEqual(created["parking_location"], "Hội sở")
+
 
 if __name__ == "__main__":
     unittest.main()
