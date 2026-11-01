@@ -898,7 +898,7 @@ def set_area_admin_key(area_code, custom_key=""):
     spec = AREA_ADMIN_SPECS.get(area_code)
     if not spec:
         return None, "Không tìm thấy tài khoản khu vực."
-    new_key = str(custom_key or "").strip().upper()
+    new_key = str(custom_key or "")
     if not new_key:
         new_key = gen_area_admin_key()
     elif not re.fullmatch(r"\S{6,64}", new_key):
@@ -906,7 +906,7 @@ def set_area_admin_key(area_code, custom_key=""):
     stamp = now_vn().strftime("%Y-%m-%d %H:%M")
     init_db()
     with db_connect() as conn:
-        if ADMIN_KEY and hmac.compare_digest(new_key, ADMIN_KEY.upper()):
+        if ADMIN_KEY and hmac.compare_digest(new_key, ADMIN_KEY):
             return None, "Mã này đang được dùng cho admin tổng."
         account_rows = conn.execute(
             "SELECT area_code, key_hash FROM area_admin_accounts WHERE area_code <> ?",
