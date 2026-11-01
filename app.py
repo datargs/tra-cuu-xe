@@ -70,6 +70,15 @@ CENTER_FILTER_LABELS = {
     MAIN_CENTER_CODE: "Hội sở",
     **{area_code: spec["label"] for area_code, spec in AREA_ADMIN_SPECS.items()},
 }
+PARKING_LOCATION_OPTIONS = [
+    "Trụ sở",
+    "Cửa Nam",
+    "BPKD Bắc Hà Nội",
+    "BPKD Tây Hà Nội",
+    "BPKD Vĩnh Phúc",
+    "TT QLTM Hải Phòng",
+    "TT QLTM Bắc Ninh",
+]
 
 SHEET_XE = "Xe"
 SHEET_HISTORY = "Lịch sử bảo dưỡng"
@@ -9357,6 +9366,10 @@ def admin_data():
         return render_maintenance_workspace(data, selected, center_filter, focus)
 
     car_status = normalize_vehicle_status(car.get("Trạng thái", ""))
+    parking_location = str(car.get(CAR_LOCATION_COLUMN, "") or "").strip()
+    parking_location_options = list(PARKING_LOCATION_OPTIONS)
+    if parking_location and parking_location not in parking_location_options:
+        parking_location_options.insert(0, parking_location)
 
     vehicle_rows = []
     for _, row in data["xe"].iterrows():
@@ -9476,7 +9489,12 @@ def admin_data():
               </div>
               <div class="field">
                 <label for="parking-location">Địa điểm xe đỗ</label>
-                <input id="parking-location" name="parking_location" value="{{ car.get("DiaDiem", "") }}" placeholder="VD: Cửa Nam">
+                <select id="parking-location" name="parking_location">
+                  <option value="">Chưa cập nhật</option>
+                  {% for location in parking_location_options %}
+                    <option value="{{ location }}" {{ 'selected' if parking_location == location else '' }}>{{ location }}</option>
+                  {% endfor %}
+                </select>
               </div>
               <div class="form-row">
                 <div class="field">
@@ -9935,6 +9953,8 @@ def admin_data():
         selected=selected,
         car=car,
         car_status=car_status,
+        parking_location=parking_location,
+        parking_location_options=parking_location_options,
         next_item=next_item,
         latest_service_date=latest_service_date,
         maintenance_state=maintenance_state,
