@@ -2911,18 +2911,23 @@ BASE_TEMPLATE = r"""
       background: #fff7df !important;
       color: #946200 !important;
       gap: 6px;
+      min-height: 38px !important;
+      padding: 10px 13px !important;
+      font-size: 14px !important;
+      line-height: 1 !important;
     }
     .plan-reminder-count {
-      min-width: 20px;
-      height: 20px;
-      padding: 0 5px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 4px;
       border-radius: 999px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       background: #c62828;
       color: #fff;
-      font-size: 12px;
+      font-size: 11px;
+      line-height: 1;
     }
     .btn.primary:hover { background: linear-gradient(180deg, #005baa, #00457f); color: #fff; }
     .page {
@@ -6340,15 +6345,15 @@ BASE_TEMPLATE = r"""
       <div class="nav-overlay" data-menu-close></div>
       <nav class="nav" id="site-nav">
         <span class="nav-title">Menu</span>
-        <a class="{{ 'active' if active == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}">Dashboard</a>
-        <a class="{{ 'active' if active == 'detail' else '' }}" href="{{ url_for('detail') }}">Chi tiết</a>
-        {% if can_manage_data %}
-          <a class="{{ 'active' if active in ['data', 'admin'] else '' }}" href="{{ url_for('admin_data') }}">Quản trị</a>
-        {% endif %}
         {% if plan_alerts %}
           <a class="plan-reminder" href="{{ url_for('maintenance_alerts') }}" title="Xem danh sách kế hoạch dự kiến chưa cập nhật thực tế">
             Nhắc việc <span class="plan-reminder-count">{{ plan_alerts|length }}</span>
           </a>
+        {% endif %}
+        <a class="{{ 'active' if active == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a class="{{ 'active' if active == 'detail' else '' }}" href="{{ url_for('detail') }}">Chi tiết</a>
+        {% if can_manage_data %}
+          <a class="{{ 'active' if active in ['data', 'admin'] else '' }}" href="{{ url_for('admin_data') }}">Quản trị</a>
         {% endif %}
         <a href="{{ url_for('logout') }}">Đăng xuất</a>
       </nav>
